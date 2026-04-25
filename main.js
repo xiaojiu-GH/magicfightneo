@@ -1290,7 +1290,16 @@ function drawPlayerShape(ctx, player) {
         drawY -= offsetY;
     }
 
-    ctx.fillStyle = player.config.color;
+    // 根据法系决定玩家颜色
+    let playerColor = player.config.color; // 默认老版本颜色
+    if (p1 && p2 && p1.className !== p2.className) {
+        if (player.className === '火系') playerColor = '#e74c3c'; // 红色
+        else if (player.className === '水系') playerColor = '#3498db'; // 蓝色
+        else if (player.className === '土系') playerColor = '#8b4513'; // 棕色
+        else if (player.className === '风系') playerColor = '#2ecc71'; // 绿色
+    }
+
+    ctx.fillStyle = playerColor;
     ctx.beginPath();
     ctx.arc(player.x, drawY, player.radius, 0, Math.PI * 2);
     ctx.fill();
@@ -1713,7 +1722,18 @@ function endGame(winner, notifyPeer) {
         winnerText.style.color = '#ecf0f1';
     } else {
         winnerText.innerText = `${winner} 获胜！`;
-        winnerText.style.color = winner === '玩家 A' ? configA.color : configB.color;
+        
+        let winnerColor = winner === '玩家 A' ? configA.color : configB.color;
+        const winnerPlayer = winner === '玩家 A' ? p1 : p2;
+        
+        if (p1 && p2 && p1.className !== p2.className) {
+            if (winnerPlayer.className === '火系') winnerColor = '#e74c3c';
+            else if (winnerPlayer.className === '水系') winnerColor = '#3498db';
+            else if (winnerPlayer.className === '土系') winnerColor = '#8b4513';
+            else if (winnerPlayer.className === '风系') winnerColor = '#2ecc71';
+        }
+        
+        winnerText.style.color = winnerColor;
     }
 }
 
