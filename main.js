@@ -821,7 +821,7 @@ class Player {
                 }));
                 break;
             case 'frostray':
-                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 1000, 10, '#00a8ff', 'frostray', target => {
+                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 800, 10, '#00a8ff', 'frostray', target => {
                     target.takeDamage(15, this.className);
                     target.addStatus('slow', 2);
                 }));
