@@ -138,6 +138,11 @@ const localBtn = document.getElementById('local-mode-btn');
 const hostBtn = document.getElementById('host-room-btn');
 const joinBtn = document.getElementById('join-room-btn');
 const copyRoomBtn = document.getElementById('copy-room-btn');
+const deleteRoomBtn = document.getElementById('delete-room-btn');
+const disconnectBtn = document.getElementById('disconnect-btn');
+const returnLobbyBtn = document.getElementById('return-lobby-btn');
+const countdownOverlayEl = document.getElementById('countdown-overlay');
+const countdownTextEl = document.getElementById('countdown-text');
 
 let playerAClass = null;
 let playerBClass = null;
@@ -148,6 +153,7 @@ let particles = [];
 let lastTime = 0;
 let animationStarted = false;
 let startScheduled = false;
+let countdownTimer = null;
 
 const keys = {};
 let remoteKeys = {};
@@ -160,6 +166,7 @@ let peer = null;
 let connection = null;
 let roomId = '';
 let lastSnapshotSent = 0;
+let networkEvents = [];
 
 const SkillData = {
     '火系': {
@@ -232,6 +239,46 @@ function setSelectionStatusDefaults() {
     document.getElementById('p2-status').innerText = '当前选择：等待中...';
 }
 
+function clearInputStates() {
+    Object.keys(keys).forEach(key => { keys[key] = false; });
+    remoteKeys = {};
+}
+
+function hideCountdownOverlay() {
+    if (countdownTimer) {
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+    }
+    countdownTextEl.innerText = '3';
+    countdownOverlayEl.classList.add('hidden');
+}
+
+function startBattleCountdown(seconds = 3) {
+    hideCountdownOverlay();
+    let remain = seconds;
+    countdownTextEl.innerText = String(remain);
+    countdownOverlayEl.classList.remove('hidden');
+
+    countdownTimer = setInterval(() => {
+        remain -= 1;
+        if (remain > 0) {
+            countdownTextEl.innerText = String(remain);
+            return;
+        }
+
+        hideCountdownOverlay();
+        clearInputStates();
+        currentState = GameState.BATTLE;
+        soundManager.start();
+        lastTime = performance.now();
+
+        if (!animationStarted) {
+            animationStarted = true;
+            requestAnimationFrame(gameLoop);
+        }
+    }, 1000);
+}
+
 function resetRuntimeState() {
     playerAClass = null;
     playerBClass = null;
@@ -241,7 +288,8 @@ function resetRuntimeState() {
     particles = [];
     remoteKeys = {};
     startScheduled = false;
-    Object.keys(keys).forEach(key => { keys[key] = false; });
+    hideCountdownOverlay();
+    clearInputStates();
     currentState = GameState.SELECTION;
     document.getElementById('selection-screen').classList.remove('hidden');
     document.getElementById('game-screen').classList.add('hidden');
@@ -262,6 +310,10 @@ function cleanupConnection(keepMode = false) {
     }
     roomId = '';
     setRoomCode('房间码：未创建');
+    
+    deleteRoomBtn.classList.add('hidden');
+    disconnectBtn.classList.add('hidden');
+
     if (!keepMode) {
         networkMode = NetworkMode.LOCAL;
         networkRole = NetworkRole.LOCAL;
@@ -331,6 +383,7 @@ function createRoom() {
     setNetworkStatus('正在创建房间...', 'normal');
     setRoomCode(`房间码：${roomId}`);
     updateStartTip();
+    deleteRoomBtn.classList.remove('hidden');
 
     peer = new window.Peer(roomId);
     peer.on('open', () => {
@@ -363,6 +416,7 @@ function joinRoom() {
     setRoomCode(`目标房间：${targetRoomId}`);
     setNetworkStatus('正在连接主机...', 'normal');
     updateStartTip();
+    disconnectBtn.classList.remove('hidden');
 
     peer = new window.Peer();
     peer.on('open', () => {
@@ -390,6 +444,17 @@ localBtn.addEventListener('click', switchToLocalMode);
 hostBtn.addEventListener('click', createRoom);
 joinBtn.addEventListener('click', joinRoom);
 copyRoomBtn.addEventListener('click', copyRoomCode);
+deleteRoomBtn.addEventListener('click', switchToLocalMode);
+disconnectBtn.addEventListener('click', switchToLocalMode);
+
+function returnToLobby() {
+    if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+        broadcast({ type: 'return-lobby' });
+    }
+    resetRuntimeState();
+}
+
+returnLobbyBtn.addEventListener('click', returnToLobby);
 
 function scheduleStartIfReady() {
     if (startScheduled || currentState !== GameState.SELECTION) return;
@@ -481,11 +546,26 @@ function handleNetworkMessage(message) {
 
     if (message.type === 'snapshot' && networkRole === NetworkRole.GUEST) {
         applySnapshot(message.state);
+        if (message.events) {
+            message.events.forEach(e => {
+                if (e.type === 'explosion') {
+                    createExplosion(e.x, e.y, e.color, e.count, e.speed, e.life, e.size, true);
+                } else if (e.type === 'sound') {
+                    if (soundManager[e.sound]) soundManager[e.sound]();
+                }
+            });
+        }
         return;
     }
 
     if (message.type === 'end' && networkRole === NetworkRole.GUEST) {
         endGame(message.winner, false);
+        return;
+    }
+
+    if (message.type === 'return-lobby' && networkRole === NetworkRole.GUEST) {
+        resetRuntimeState();
+        return;
     }
 }
 
@@ -555,6 +635,9 @@ class Player {
 
     takeDamage(amount, sourceClass = null) {
         soundManager.hit();
+        if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+            networkEvents.push({ type: 'sound', sound: 'hit' });
+        }
         let finalDamage = amount;
 
         if (sourceClass) {
@@ -675,14 +758,19 @@ class Player {
 
         if (['fireball', 'frostray', 'waterjet', 'stonevolley', 'windblade'].includes(skill.id)) {
             soundManager.shoot();
+            if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) networkEvents.push({ type: 'sound', sound: 'shoot' });
         } else if (['fireblast', 'meteor', 'waterprison', 'blizzard', 'earthquake', 'hurricane', 'frostarmor', 'earthshield'].includes(skill.id)) {
             soundManager.cast();
+            if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) networkEvents.push({ type: 'sound', sound: 'cast' });
         } else if (['flamedash', 'tailwind', 'earthspike'].includes(skill.id)) {
             soundManager.dash();
+            if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) networkEvents.push({ type: 'sound', sound: 'dash' });
         } else if (['firewall', 'windwall', 'mudswamp', 'whirlwind'].includes(skill.id)) {
             soundManager.wall();
+            if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) networkEvents.push({ type: 'sound', sound: 'wall' });
         } else {
             soundManager.shoot();
+            if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) networkEvents.push({ type: 'sound', sound: 'shoot' });
         }
 
         switch (skill.id) {
@@ -860,8 +948,12 @@ class Player {
     updateUI() {
         const hpBar = document.getElementById(this.config.id === 'A' ? 'p1-hp' : 'p2-hp');
         const mpBar = document.getElementById(this.config.id === 'A' ? 'p1-mp' : 'p2-mp');
-        hpBar.style.width = `${(this.hp / this.maxHp) * 100}%`;
-        mpBar.style.width = `${(this.mp / this.maxMp) * 100}%`;
+        
+        const hpPct = `${(this.hp / this.maxHp) * 100}%`;
+        const mpPct = `${(this.mp / this.maxMp) * 100}%`;
+        
+        if (hpBar.style.width !== hpPct) hpBar.style.width = hpPct;
+        if (mpBar.style.width !== mpPct) mpBar.style.width = mpPct;
     }
 
     updateSkillUI() {
@@ -873,10 +965,16 @@ class Player {
                 const maxCd = this.classData.skills[i].cd;
                 const currentCd = Math.max(0, this.cooldowns[i]);
                 const pct = currentCd > 0 ? (currentCd / maxCd) * 100 : 0;
-                cdOverlay.style.height = `${pct}%`;
+                const heightStr = `${pct}%`;
+                if (cdOverlay.style.height !== heightStr) {
+                    cdOverlay.style.height = heightStr;
+                }
             }
             if (skillIcon) {
-                skillIcon.style.opacity = this.mp < this.classData.skills[i].cost ? '0.5' : '1';
+                const targetOpacity = this.mp < this.classData.skills[i].cost ? '0.5' : '1';
+                if (skillIcon.style.opacity !== targetOpacity) {
+                    skillIcon.style.opacity = targetOpacity;
+                }
             }
         }
         this.updateUI();
@@ -916,8 +1014,11 @@ class Particle {
     }
 }
 
-function createExplosion(x, y, color, count, speed, life, size) {
+function createExplosion(x, y, color, count, speed, life, size, fromNetwork = false) {
     soundManager.explosion();
+    if (!fromNetwork && networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+        networkEvents.push({ type: 'explosion', x, y, color, count, speed, life, size });
+    }
     for (let i = 0; i < count; i++) {
         const angle = Math.random() * Math.PI * 2;
         const s = speed * (0.5 + Math.random() * 0.5);
@@ -1389,28 +1490,13 @@ function serializeEntity(entity) {
     return null;
 }
 
-function serializeParticle(particle) {
-    return {
-        x: particle.x,
-        y: particle.y,
-        vx: particle.vx,
-        vy: particle.vy,
-        life: particle.life,
-        maxLife: particle.maxLife,
-        color: particle.color,
-        size: particle.size,
-        fade: particle.fade
-    };
-}
-
 function buildSnapshot() {
     return {
         players: {
             A: serializePlayer(p1),
             B: serializePlayer(p2)
         },
-        entities: entities.map(serializeEntity).filter(Boolean),
-        particles: particles.slice(-100).map(serializeParticle)
+        entities: entities.map(serializeEntity).filter(Boolean)
     };
 }
 
@@ -1462,28 +1548,22 @@ function applySnapshot(state) {
     applyPlayerSnapshot(p1, state.players.A);
     applyPlayerSnapshot(p2, state.players.B);
     entities = state.entities.map(deserializeEntity).filter(Boolean);
-    particles = state.particles.map(data => {
-        const particle = new Particle(data.x, data.y, data.vx, data.vy, data.maxLife, data.color, data.size, data.fade);
-        particle.life = data.life;
-        particle.maxLife = data.maxLife;
-        return particle;
-    });
 }
 
 function maybeSendSnapshot() {
     if (networkMode !== NetworkMode.ONLINE || networkRole !== NetworkRole.HOST || !isGuestConnected()) return;
     const now = performance.now();
-    if (now - lastSnapshotSent < 50) return;
+    if (now - lastSnapshotSent < 33) return; // 约 30FPS 发送快照
     lastSnapshotSent = now;
-    broadcast({ type: 'snapshot', state: buildSnapshot() });
+    broadcast({ type: 'snapshot', state: buildSnapshot(), events: networkEvents });
+    networkEvents = [];
 }
 
 function startGame() {
     document.getElementById('selection-screen').classList.add('hidden');
     document.getElementById('end-screen').classList.add('hidden');
     document.getElementById('game-screen').classList.remove('hidden');
-    currentState = GameState.BATTLE;
-    soundManager.start();
+    currentState = GameState.SELECTION;
 
     entities = [];
     particles = [];
@@ -1494,11 +1574,7 @@ function startGame() {
     p1.initUI();
     p2.initUI();
 
-    lastTime = performance.now();
-    if (!animationStarted) {
-        animationStarted = true;
-        requestAnimationFrame(gameLoop);
-    }
+    startBattleCountdown(3);
 }
 
 function gameLoop(time) {
@@ -1513,6 +1589,74 @@ function gameLoop(time) {
     if (shouldSimulateLocally()) {
         update(dt);
         maybeSendSnapshot();
+    } else {
+        // 客机端进行视觉上的插值（外推），让飞行物和粒子平滑移动
+        if (p1 && p2) {
+            // 客机端进行简单的移动预测
+            [p1, p2].forEach(p => {
+                if (!p.hasStatus('root') && !p.hasStatus('knockup')) {
+                    const input = getInputState(p.config.id);
+                    let dx = 0;
+                    let dy = 0;
+                    if (input[p.config.keys.up]) dy -= 1;
+                    if (input[p.config.keys.down]) dy += 1;
+                    if (input[p.config.keys.left]) dx -= 1;
+                    if (input[p.config.keys.right]) dx += 1;
+                    if (dx !== 0 && dy !== 0) {
+                        const len = Math.hypot(dx, dy);
+                        dx /= len;
+                        dy /= len;
+                    }
+                    p.x += dx * p.speed * dt;
+                    p.y += dy * p.speed * dt;
+                    p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x));
+                    p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y));
+                }
+            });
+
+            entities.forEach(entity => {
+                if (entity instanceof Projectile && entity.active) {
+                    entity.x += entity.dirX * entity.speed * dt;
+                    entity.y += entity.dirY * entity.speed * dt;
+                    
+                    // 尾迹粒子
+                    if (Math.random() < 0.5) {
+                        if (entity.type === 'fireball') {
+                            particles.push(new Particle(entity.x, entity.y, -entity.dirX * 50, -entity.dirY * 50, 0.4, '#f39c12', entity.radius * 0.4));
+                        } else if (entity.type === 'frostray' || entity.type === 'waterjet') {
+                            particles.push(new Particle(entity.x, entity.y, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, 0.3, '#ecf0f1', entity.radius * 0.25));
+                        } else if (entity.type === 'stone') {
+                            particles.push(new Particle(entity.x, entity.y, -entity.dirX * 20, -entity.dirY * 20, 0.25, '#95a5a6', entity.radius * 0.3));
+                        } else if (entity.type === 'windblade' || entity.type === 'whirlwind') {
+                            particles.push(new Particle(entity.x, entity.y, -entity.dirY * 20, entity.dirX * 20, 0.25, '#ecf0f1', entity.radius * 0.18));
+                        }
+                    }
+                } else if (entity instanceof Wall && entity.active) {
+                    if (Math.random() < 0.25) {
+                        const offset = (Math.random() - 0.5) * entity.length;
+                        particles.push(new Particle(
+                            entity.x + entity.dx * offset,
+                            entity.y + entity.dy * offset,
+                            entity.dy * 20,
+                            -entity.dx * 20,
+                            0.5,
+                            entity.damaging ? '#f39c12' : '#ecf0f1',
+                            2
+                        ));
+                    }
+                } else if (entity instanceof AoE && entity.active) {
+                    if (entity.type === 'fireblast' && Math.random() < 0.2) {
+                        particles.push(new Particle(entity.x + (Math.random() - 0.5) * entity.radius, entity.y + (Math.random() - 0.5) * entity.radius, 0, -20, 0.5, '#e67e22', 2));
+                    } else if (entity.type === 'waterprison' && Math.random() < 0.2) {
+                        particles.push(new Particle(entity.x + (Math.random() - 0.5) * entity.radius, entity.y + (Math.random() - 0.5) * entity.radius, 0, -30, 0.6, '#ecf0f1', 3));
+                    } else if (entity.type === 'hurricane') {
+                        particles.push(new Particle(entity.x + (Math.random() - 0.5) * entity.radius, entity.y + (Math.random() - 0.5) * entity.radius, (Math.random() - 0.5) * 40, -40, 0.4, '#1abc9c', 2));
+                    }
+                }
+            });
+            particles.forEach(particle => particle.update(dt));
+            particles = particles.filter(particle => particle.life > 0);
+        }
     }
     draw();
     requestAnimationFrame(gameLoop);
@@ -1553,6 +1697,7 @@ function draw() {
 
 function endGame(winner, notifyPeer) {
     currentState = GameState.END;
+    hideCountdownOverlay();
     soundManager.win();
     if (notifyPeer && networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
         broadcast({ type: 'end', winner });
