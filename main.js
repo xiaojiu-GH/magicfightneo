@@ -896,7 +896,7 @@ class Player {
                 }));
                 break;
             case 'windblade':
-                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 800, 10, '#1abc9c', 'windblade', target => {
+                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 1200, 10, '#1abc9c', 'windblade', target => {
                     target.takeDamage(8, this.className);
                 }));
                 break;
