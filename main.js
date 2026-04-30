@@ -208,6 +208,16 @@ const SkillData = {
             { id: 'hurricane', name: '飓风术', cd: 15, cost: 45, keyName: '4/-', desc: '在目标区域召唤强大飓风，短暂延迟后将敌人浮空并造成巨额伤害' },
             { id: 'tailwind', name: '顺风之息', cd: 20, cost: 20, keyName: '5/=', desc: '为自己附加极速状态，移动速度提升60%，持续5秒' }
         ]
+    },
+    '电系': {
+        color: '#f1c40f',
+        skills: [
+            { id: 'spark', name: '电火花', cd: 1, cost: 5, keyName: '1/8', desc: '极速电流，伤害低，能快速叠加感电层数' },
+            { id: 'balllightning', name: '球状闪电', cd: 8, cost: 25, keyName: '2/9', desc: '缓慢飞行的雷电球，持续电击周围敌人' },
+            { id: 'magneticfield', name: '电磁立场', cd: 12, cost: 35, keyName: '3/0', desc: '在自身周围生成电磁场，持续伤害并减速靠近的敌人' },
+            { id: 'thunderstrike', name: '落雷', cd: 10, cost: 30, keyName: '4/-', desc: '在鼠标位置召唤落雷，小范围高伤害并附带麻痹' },
+            { id: 'railgun', name: '超电磁炮', cd: 18, cost: 50, keyName: '5/=', desc: '蓄力后发射贯穿全图的闪电射线，造成巨额即时伤害' }
+        ]
     }
 };
 
@@ -230,7 +240,7 @@ function updateStartTip() {
         return;
     }
     if (networkRole === NetworkRole.GUEST) {
-        startTipEl.textContent = '联机客机：你负责玩家 B，连接成功后按 7/8/9/0 选择法系';
+        startTipEl.textContent = '联机客机：你负责玩家 B，连接成功后按 6/7/8/9/0 选择法系';
     }
 }
 
@@ -475,15 +485,15 @@ function scheduleStartIfReady() {
 function handleSelectionInput(key) {
     if (currentState !== GameState.SELECTION) return;
 
-    const classMap = { '1': '火系', '2': '水系', '3': '土系', '4': '风系', '7': '风系', '8': '火系', '9': '水系', '0': '土系' };
+    const classMap = { '1': '火系', '2': '水系', '3': '土系', '4': '风系', '5': '电系', '6': '电系', '7': '风系', '8': '火系', '9': '水系', '0': '土系' };
 
     if (networkMode === NetworkMode.LOCAL) {
-        if (['1', '2', '3', '4'].includes(key)) {
+        if (['1', '2', '3', '4', '5'].includes(key)) {
             playerAClass = classMap[key];
             document.getElementById('p1-status').innerText = `当前选择：${playerAClass}`;
             soundManager.select();
         }
-        if (['7', '8', '9', '0'].includes(key)) {
+        if (['6', '7', '8', '9', '0'].includes(key)) {
             playerBClass = classMap[key];
             document.getElementById('p2-status').innerText = `当前选择：${playerBClass}`;
             soundManager.select();
@@ -492,7 +502,7 @@ function handleSelectionInput(key) {
         return;
     }
 
-    if (networkRole === NetworkRole.HOST && ['1', '2', '3', '4'].includes(key)) {
+    if (networkRole === NetworkRole.HOST && ['1', '2', '3', '4', '5'].includes(key)) {
         playerAClass = classMap[key];
         document.getElementById('p1-status').innerText = `当前选择：${playerAClass}`;
         broadcast({ type: 'host-selection', className: playerAClass });
@@ -500,7 +510,7 @@ function handleSelectionInput(key) {
         scheduleStartIfReady();
     }
 
-    if (networkRole === NetworkRole.GUEST && ['7', '8', '9', '0'].includes(key)) {
+    if (networkRole === NetworkRole.GUEST && ['6', '7', '8', '9', '0'].includes(key)) {
         playerBClass = classMap[key];
         document.getElementById('p2-status').innerText = `当前选择：${playerBClass}`;
         if (isGuestConnected()) {
@@ -549,7 +559,7 @@ function handleNetworkMessage(message) {
         if (message.events) {
             message.events.forEach(e => {
                 if (e.type === 'explosion') {
-                    createExplosion(e.x, e.y, e.color, e.count, e.speed, e.life, e.size, true);
+                    createExplosion(e.x, e.y, e.color, e.count, e.speed, e.life, e.size, true, e.playSound);
                 } else if (e.type === 'sound') {
                     if (soundManager[e.sound]) soundManager[e.sound]();
                 }
@@ -618,7 +628,7 @@ class Player {
     }
 
     get speed() {
-        if (this.hasStatus('root')) return 0;
+        if (this.hasStatus('root') || this.hasStatus('paralyze')) return 0;
         let finalSpeed = this.baseSpeed;
         if (this.hasStatus('slow')) finalSpeed *= 0.6;
         if (this.hasStatus('haste')) finalSpeed *= 1.6;
@@ -633,6 +643,17 @@ class Player {
         this.statuses.push({ type, duration, maxDuration: duration, value, tickTimer: 0 });
     }
 
+    applyShock(sourceClass) {
+        this.addStatus('shock', 5);
+        const shockCount = this.statuses.filter(s => s.type === 'shock').length;
+        if (shockCount >= 3) {
+            // Remove all shocks
+            this.statuses = this.statuses.filter(s => s.type !== 'shock');
+            this.takeDamage(15, sourceClass); // Nerfed bonus true damage from 30 to 15
+            createExplosion(this.x, this.y, '#f1c40f', 15, 60, 0.4, 3);
+        }
+    }
+
     takeDamage(amount, sourceClass = null) {
         soundManager.hit();
         if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
@@ -644,7 +665,9 @@ class Player {
             if ((sourceClass === '火系' && this.className === '风系') ||
                 (sourceClass === '风系' && this.className === '土系') ||
                 (sourceClass === '土系' && this.className === '水系') ||
-                (sourceClass === '水系' && this.className === '火系')) {
+                (sourceClass === '水系' && this.className === '火系') ||
+                (sourceClass === '电系' && (this.className === '土系' || this.className === '火系')) ||
+                (sourceClass === '水系' && this.className === '电系')) {
                 finalDamage *= 1.2;
             }
         }
@@ -693,6 +716,27 @@ class Player {
                 }
             }
 
+            if (s.type === 'magnetic_field') {
+                if (Math.random() < 0.2) {
+                    particles.push(new Particle(
+                        this.x + (Math.random() - 0.5) * 150,
+                        this.y + (Math.random() - 0.5) * 150,
+                        0, -10, 0.3, '#f1c40f', 2
+                    ));
+                }
+                s.tickTimer += dt;
+                if (s.tickTimer >= 0.5) {
+                    const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
+                    if (dist < 150) {
+                        enemy.takeDamage(5, '电系');
+                        enemy.addStatus('slow', 0.5);
+                        enemy.applyShock('电系');
+                        particles.push(new Particle(this.x, this.y, (enemy.x - this.x)*5, (enemy.y - this.y)*5, 0.2, '#f1c40f', 3));
+                    }
+                    s.tickTimer -= 0.5;
+                }
+            }
+
             if (s.duration <= 0) {
                 if (s.type === 'shield') {
                     const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
@@ -706,7 +750,7 @@ class Player {
             }
         }
 
-        if (!this.hasStatus('root') && !this.hasStatus('knockup')) {
+        if (!this.hasStatus('root') && !this.hasStatus('knockup') && !this.hasStatus('paralyze')) {
             const input = getInputState(this.config.id);
             let dx = 0;
             let dy = 0;
@@ -732,13 +776,15 @@ class Player {
         this.updateSkillUI();
 
         const input = getInputState(this.config.id);
-        for (let i = 0; i < 5; i++) {
-            const skillKey = this.config.keys[`skill${i + 1}`];
-            if (skillKey && input[skillKey] && this.cooldowns[i] <= 0 && this.classData.skills[i]) {
-                const cost = this.classData.skills[i].cost;
-                if (this.mp >= cost) {
-                    this.mp -= cost;
-                    this.castSkill(i, enemy);
+        if (!this.hasStatus('knockup') && !this.hasStatus('paralyze')) {
+            for (let i = 0; i < 5; i++) {
+                const skillKey = this.config.keys[`skill${i + 1}`];
+                if (skillKey && input[skillKey] && this.cooldowns[i] <= 0 && this.classData.skills[i]) {
+                    const cost = this.classData.skills[i].cost;
+                    if (this.mp >= cost) {
+                        this.mp -= cost;
+                        this.castSkill(i, enemy);
+                    }
                 }
             }
         }
@@ -914,7 +960,7 @@ class Player {
                 break;
             }
             case 'hurricane':
-                entities.push(new AoE(this, enemy.x, enemy.y, 60, 1.0, '#1abc9c', 'hurricane', target => {
+                entities.push(new AoE(this, enemy.x, enemy.y, 90, 0.6, '#1abc9c', 'hurricane', target => {
                     target.takeDamage(45, this.className);
                     target.addStatus('knockup', 1.5);
                 }));
@@ -923,6 +969,50 @@ class Player {
                 this.addStatus('haste', 5);
                 createExplosion(this.x, this.y, '#1abc9c', 20, 100, 0.5, 3);
                 break;
+            case 'spark':
+                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 1500, 6, '#f1c40f', 'spark', target => {
+                    target.takeDamage(5, this.className);
+                    target.applyShock(this.className);
+                }));
+                break;
+            case 'balllightning':
+                // Slow moving projectile that constantly zaps nearby enemies
+                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 150, 25, '#f1c40f', 'balllightning', target => {
+                    target.takeDamage(10, this.className); // Slightly nerfed direct hit damage
+                    target.addStatus('paralyze', 0.2); // Restore a bit of paralyze
+                    target.applyShock(this.className);
+                }));
+                break;
+            case 'magneticfield':
+                this.addStatus('magnetic_field', 5);
+                createExplosion(this.x, this.y, '#f1c40f', 15, 80, 0.4, 3);
+                break;
+            case 'thunderstrike':
+                // Small AoE at mouse/enemy location with delay
+                entities.push(new AoE(this, enemy.x, enemy.y, 40, 0.3, '#9b59b6', 'thunderstrike', target => {
+                    target.takeDamage(35, this.className);
+                    target.addStatus('paralyze', 0.5);
+                    target.applyShock(this.className);
+                }));
+                break;
+            case 'railgun': {
+                // Hitscan: damage anything in a line after a 1 second charge
+                this.addStatus('root', 1); // Self root during cast
+                
+                // Initial direction
+                let currentAngle = Math.atan2(enemy.y - this.y, enemy.x - this.x);
+                let targetX = this.x + Math.cos(currentAngle) * 1000;
+                let targetY = this.y + Math.sin(currentAngle) * 1000;
+                
+                // We use AoE class but with a special 'railgun' type to handle line intersection
+                entities.push(new AoE(this, targetX, targetY, 1, 1.0, '#f1c40f', 'railgun', target => {
+                    target.takeDamage(60, this.className);
+                    target.addStatus('paralyze', 0.5);
+                    target.applyShock(this.className);
+                    createExplosion(target.x, target.y, '#f1c40f', 30, 150, 0.6, 5);
+                }));
+                break;
+            }
         }
     }
 
@@ -1014,10 +1104,10 @@ class Particle {
     }
 }
 
-function createExplosion(x, y, color, count, speed, life, size, fromNetwork = false) {
-    soundManager.explosion();
+function createExplosion(x, y, color, count, speed, life, size, fromNetwork = false, playSound = true) {
+    if (playSound) soundManager.explosion();
     if (!fromNetwork && networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
-        networkEvents.push({ type: 'explosion', x, y, color, count, speed, life, size });
+        networkEvents.push({ type: 'explosion', x, y, color, count, speed, life, size, playSound });
     }
     for (let i = 0; i < count; i++) {
         const angle = Math.random() * Math.PI * 2;
@@ -1076,6 +1166,28 @@ class Projectile {
                 particles.push(new Particle(this.x, this.y, -this.dirX * 20, -this.dirY * 20, 0.25, '#95a5a6', this.radius * 0.3));
             } else if (this.type === 'windblade' || this.type === 'whirlwind') {
                 particles.push(new Particle(this.x, this.y, -this.dirY * 20, this.dirX * 20, 0.25, '#ecf0f1', this.radius * 0.18));
+            } else if (this.type === 'spark') {
+                particles.push(new Particle(this.x, this.y, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20, 0.2, '#f1c40f', 2));
+            } else if (this.type === 'balllightning') {
+                particles.push(new Particle(this.x + (Math.random() - 0.5) * 40, this.y + (Math.random() - 0.5) * 40, 0, 0, 0.3, '#f1c40f', 3));
+            }
+        }
+        
+        if (this.type === 'balllightning') {
+            const enemy = this.owner === p1 ? p2 : p1;
+            const distToEnemy = Math.hypot(this.x - enemy.x, this.y - enemy.y);
+            if (distToEnemy < 100 && Math.random() < dt * 1.5) { // ~1.5 zaps per second (balanced frequency)
+                enemy.takeDamage(2, '电系'); // Slightly reduced zap damage
+                enemy.addStatus('paralyze', 0.1); // Restore some paralyze
+                enemy.applyShock('电系');
+                // visual arc
+                for(let i=0; i<3; i++) {
+                    particles.push(new Particle(
+                        this.x + (enemy.x - this.x) * (i/3),
+                        this.y + (enemy.y - this.y) * (i/3),
+                        0, 0, 0.1, '#f1c40f', 2
+                    ));
+                }
             }
         }
 
@@ -1088,7 +1200,7 @@ class Projectile {
         const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
         if (dist < this.radius + enemy.radius && !this.hitTargets.has(enemy.config.id)) {
             this.onHit(enemy);
-            if (this.pierce) {
+            if (this.pierce || this.type === 'balllightning') {
                 this.hitTargets.add(enemy.config.id);
             } else {
                 this.active = false;
@@ -1104,6 +1216,10 @@ class Projectile {
                 createExplosion(this.x, this.y, '#1abc9c', 8, 120, 0.3, 3);
             } else if (this.type === 'whirlwind') {
                 createExplosion(this.x, this.y, '#16a085', 12, 80, 0.4, 4);
+            } else if (this.type === 'spark') {
+                createExplosion(this.x, this.y, '#f1c40f', 5, 80, 0.2, 2);
+            } else if (this.type === 'balllightning') {
+                createExplosion(this.x, this.y, '#f1c40f', 20, 150, 0.5, 4);
             }
         }
     }
@@ -1184,6 +1300,8 @@ class AoE {
         this.owner = owner;
         this.x = x;
         this.y = y;
+        this.targetX = x; // useful for directional AoEs
+        this.targetY = y;
         this.radius = radius;
         this.delay = delay;
         this.timer = 0;
@@ -1197,19 +1315,76 @@ class AoE {
         if (!this.active) return;
         this.timer += dt;
 
+        if (this.type === 'railgun') {
+            const enemy = this.owner === p1 ? p2 : p1;
+            // Calculate angle to current target position
+            let currentAngle = Math.atan2(this.y - this.owner.y, this.x - this.owner.x);
+            // Calculate angle to enemy
+            let targetAngle = Math.atan2(enemy.y - this.owner.y, enemy.x - this.owner.x);
+            
+            // Normalize angles
+            let diff = targetAngle - currentAngle;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            
+            // Turn speed: ~12.5 degrees per second (balanced tracking)
+            const turnSpeed = 0.22 * dt;
+            
+            if (Math.abs(diff) <= turnSpeed) {
+                currentAngle = targetAngle;
+            } else {
+                currentAngle += Math.sign(diff) * turnSpeed;
+            }
+            
+            // Update x,y to point in the new direction
+            this.x = this.owner.x + Math.cos(currentAngle) * 1000;
+            this.y = this.owner.y + Math.sin(currentAngle) * 1000;
+        }
+
         if (this.type === 'fireblast' && Math.random() < 0.2) {
             particles.push(new Particle(this.x + (Math.random() - 0.5) * this.radius, this.y + (Math.random() - 0.5) * this.radius, 0, -20, 0.5, '#e67e22', 2));
         } else if (this.type === 'waterprison' && Math.random() < 0.2) {
             particles.push(new Particle(this.x + (Math.random() - 0.5) * this.radius, this.y + (Math.random() - 0.5) * this.radius, 0, -30, 0.6, '#ecf0f1', 3));
         } else if (this.type === 'hurricane') {
             particles.push(new Particle(this.x + (Math.random() - 0.5) * this.radius, this.y + (Math.random() - 0.5) * this.radius, (Math.random() - 0.5) * 40, -40, 0.4, '#1abc9c', 2));
+        } else if (this.type === 'railgun') {
+            // Charging effect at player position and along the line
+            particles.push(new Particle(this.owner.x + (Math.random() - 0.5) * 40, this.owner.y + (Math.random() - 0.5) * 40, 0, 0, 0.3, '#f1c40f', 2));
+            
+            // Draw line
+            let rx = this.x - this.owner.x;
+            let ry = this.y - this.owner.y;
+            const rDist = Math.hypot(rx, ry);
+            if (rDist > 0) { rx /= rDist; ry /= rDist; }
+            
+            if (Math.random() < 0.3) {
+                const dist = Math.random() * 800;
+                particles.push(new Particle(this.owner.x + rx * dist, this.owner.y + ry * dist, (Math.random() - 0.5)*10, (Math.random() - 0.5)*10, 0.2, '#f1c40f', 2));
+            }
         }
 
         if (this.timer >= this.delay) {
             const enemy = this.owner === p1 ? p2 : p1;
-            const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
-            if (dist < this.radius + enemy.radius) {
-                this.onHit(enemy);
+            if (this.type === 'railgun') {
+                // Line hit detection
+                let rx = this.x - this.owner.x;
+                let ry = this.y - this.owner.y;
+                const rDist = Math.hypot(rx, ry);
+                if (rDist > 0) { rx /= rDist; ry /= rDist; }
+                else { rx = 1; ry = 0; }
+                
+                const crossProduct = Math.abs(rx * (enemy.y - this.owner.y) - ry * (enemy.x - this.owner.x));
+                const isHitting = crossProduct <= enemy.radius + 15;
+                const dotProduct = (enemy.x - this.owner.x) * rx + (enemy.y - this.owner.y) * ry;
+                
+                if (isHitting && dotProduct > 0) {
+                    this.onHit(enemy);
+                }
+            } else {
+                const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
+                if (dist < this.radius + enemy.radius) {
+                    this.onHit(enemy);
+                }
             }
             this.active = false;
             triggerAoEExplosion(this);
@@ -1242,6 +1417,19 @@ function triggerAoEExplosion(aoe) {
     } else if (aoe.type === 'earthquake') {
         createExplosion(aoe.x, aoe.y, '#8e44ad', 40, 300, 1.0, 8);
         createExplosion(aoe.x, aoe.y, '#9b59b6', 20, 200, 0.8, 5);
+    } else if (aoe.type === 'thunderstrike') {
+        createExplosion(aoe.x, aoe.y, '#9b59b6', 25, 120, 0.5, 5);
+        createExplosion(aoe.x, aoe.y, '#f1c40f', 15, 80, 0.4, 3);
+    } else if (aoe.type === 'railgun') {
+        let rx = aoe.x - aoe.owner.x;
+        let ry = aoe.y - aoe.owner.y;
+        const rDist = Math.hypot(rx, ry);
+        if (rDist > 0) { rx /= rDist; ry /= rDist; }
+        soundManager.explosion();
+        for (let i = 0; i < 20; i++) {
+            const dist = Math.random() * 1000;
+            createExplosion(aoe.owner.x + rx * dist, aoe.owner.y + ry * dist, '#f1c40f', 5, 50, 0.3, 3, false, false);
+        }
     }
 }
 
@@ -1250,9 +1438,31 @@ function drawPlayerShape(ctx, player) {
     const hasSlow = player.hasStatus ? player.hasStatus('slow') : player.statuses.some(s => s.type === 'slow');
     const hasHaste = player.hasStatus ? player.hasStatus('haste') : player.statuses.some(s => s.type === 'haste');
     const hasControl = player.hasStatus
-        ? player.hasStatus('root') || player.hasStatus('knockup')
-        : player.statuses.some(s => s.type === 'root' || s.type === 'knockup');
+        ? player.hasStatus('root') || player.hasStatus('knockup') || player.hasStatus('paralyze')
+        : player.statuses.some(s => s.type === 'root' || s.type === 'knockup' || s.type === 'paralyze');
 
+    const hasMagneticField = player.hasStatus 
+        ? player.hasStatus('magnetic_field') 
+        : player.statuses.some(s => s.type === 'magnetic_field');
+
+    if (hasMagneticField) {
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, 150, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(241, 196, 15, 0.3)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(241, 196, 15, 0.05)';
+        ctx.fill();
+        
+        ctx.rotate(performance.now() / 200);
+        ctx.setLineDash([10, 20]);
+        ctx.strokeStyle = 'rgba(241, 196, 15, 0.5)';
+        ctx.stroke();
+        ctx.restore();
+    }
+    
     if (player.shieldAmount > 0) {
         ctx.save();
         ctx.translate(player.x, player.y);
@@ -1297,6 +1507,7 @@ function drawPlayerShape(ctx, player) {
         else if (player.className === '水系') playerColor = '#3498db'; // 蓝色
         else if (player.className === '土系') playerColor = '#8b4513'; // 棕色
         else if (player.className === '风系') playerColor = '#2ecc71'; // 绿色
+        else if (player.className === '电系') playerColor = '#f1c40f'; // 黄色
     }
 
     ctx.fillStyle = playerColor;
@@ -1316,6 +1527,17 @@ function drawPlayerShape(ctx, player) {
         ctx.fillStyle = '#1abc9c';
         ctx.fillRect(player.x + 5, drawY - player.radius - 10, 10, 10);
     }
+    
+    const shockCount = player.statuses.filter(s => s.type === 'shock').length;
+    if (shockCount > 0) {
+        ctx.fillStyle = '#f1c40f';
+        for (let i = 0; i < shockCount; i++) {
+            ctx.beginPath();
+            ctx.arc(player.x - 10 + i * 10, drawY - player.radius - 15, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
     if (hasControl) {
         ctx.strokeStyle = '#9b59b6';
         ctx.lineWidth = 4;
@@ -1378,6 +1600,24 @@ function drawProjectileShape(ctx, projectile) {
         ctx.moveTo(-projectile.dirX * projectile.radius * 1.5, -projectile.dirY * projectile.radius * 1.5);
         ctx.lineTo(projectile.dirX * projectile.radius * 1.5, projectile.dirY * projectile.radius * 1.5);
         ctx.stroke();
+    } else if (projectile.type === 'spark') {
+        ctx.strokeStyle = '#f1c40f';
+        ctx.lineCap = 'round';
+        ctx.lineWidth = projectile.radius;
+        ctx.beginPath();
+        ctx.moveTo(-projectile.dirX * projectile.radius * 2, -projectile.dirY * projectile.radius * 2);
+        ctx.lineTo(projectile.dirX * projectile.radius * 2, projectile.dirY * projectile.radius * 2);
+        ctx.stroke();
+    } else if (projectile.type === 'balllightning') {
+        ctx.fillStyle = '#f1c40f';
+        ctx.beginPath();
+        ctx.arc(0, 0, projectile.radius * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#f39c12';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, projectile.radius + Math.random() * 5, 0, Math.PI * 2);
+        ctx.stroke();
     } else {
         ctx.fillStyle = projectile.color;
         ctx.beginPath();
@@ -1404,6 +1644,23 @@ function drawWallShape(ctx, wall) {
 function drawAoEShape(ctx, aoe) {
     if (!aoe.active) return;
     ctx.save();
+    if (aoe.type === 'railgun') {
+        let rx = aoe.x - aoe.owner.x;
+        let ry = aoe.y - aoe.owner.y;
+        const rDist = Math.hypot(rx, ry);
+        if (rDist > 0) { rx /= rDist; ry /= rDist; }
+        
+        ctx.strokeStyle = '#f1c40f';
+        ctx.globalAlpha = 0.5 + (Math.sin(performance.now() / 50) * 0.2);
+        ctx.lineWidth = 2 + (aoe.timer / aoe.delay) * 4;
+        ctx.beginPath();
+        ctx.moveTo(aoe.owner.x, aoe.owner.y);
+        ctx.lineTo(aoe.owner.x + rx * 2000, aoe.owner.y + ry * 2000);
+        ctx.stroke();
+        ctx.restore();
+        return;
+    }
+
     if (['fireblast', 'meteor', 'blizzard', 'earthquake', 'hurricane'].includes(aoe.type)) {
         ctx.strokeStyle = aoe.color;
         ctx.lineWidth = aoe.type === 'earthquake' ? 5 : 2;
@@ -1603,7 +1860,7 @@ function gameLoop(time) {
         if (p1 && p2) {
             // 客机端进行简单的移动预测
             [p1, p2].forEach(p => {
-                if (!p.hasStatus('root') && !p.hasStatus('knockup')) {
+                if (!p.hasStatus('root') && !p.hasStatus('knockup') && !p.hasStatus('paralyze')) {
                     const input = getInputState(p.config.id);
                     let dx = 0;
                     let dy = 0;
@@ -1731,6 +1988,7 @@ function endGame(winner, notifyPeer) {
             else if (winnerPlayer.className === '水系') winnerColor = '#3498db';
             else if (winnerPlayer.className === '土系') winnerColor = '#8b4513';
             else if (winnerPlayer.className === '风系') winnerColor = '#2ecc71';
+            else if (winnerPlayer.className === '电系') winnerColor = '#f1c40f';
         }
         
         winnerText.style.color = winnerColor;
