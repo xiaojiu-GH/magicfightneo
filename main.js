@@ -725,15 +725,15 @@ class Player {
                     ));
                 }
                 s.tickTimer += dt;
-                if (s.tickTimer >= 0.5) {
+                if (s.tickTimer >= 1.0) {
                     const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
                     if (dist < 150) {
-                        enemy.takeDamage(5, '电系');
-                        enemy.addStatus('slow', 0.5);
+                        enemy.takeDamage(3, '电系');
+                        enemy.addStatus('slow', 0.2);
                         enemy.applyShock('电系');
                         particles.push(new Particle(this.x, this.y, (enemy.x - this.x)*5, (enemy.y - this.y)*5, 0.2, '#f1c40f', 3));
                     }
-                    s.tickTimer -= 0.5;
+                    s.tickTimer -= 1.0;
                 }
             }
 
