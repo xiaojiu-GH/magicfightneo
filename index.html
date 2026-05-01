@@ -12,7 +12,12 @@
         <div class="network-panel">
             <h2>联机大厅</h2>
             <div class="network-actions">
-                <button id="local-mode-btn" class="mode-btn">本地双人</button>
+                <select id="player-count-select" class="mode-btn">
+                    <option value="2">双人模式</option>
+                    <option value="3">三人模式</option>
+                    <option value="4">四人模式</option>
+                </select>
+                <button id="local-mode-btn" class="mode-btn">本地游戏</button>
                 <button id="host-room-btn" class="mode-btn primary">创建房间</button>
                 <button id="delete-room-btn" class="mode-btn hidden">删除房间</button>
                 <button id="copy-room-btn" class="mode-btn">复制房间码</button>
@@ -23,9 +28,9 @@
                 <button id="disconnect-btn" class="mode-btn hidden">断开连接</button>
             </div>
             <p id="room-code">房间码：未创建</p>
-            <p id="network-status">当前为本地双人模式</p>
+            <p id="network-status">当前为本地游戏模式</p>
         </div>
-        <div class="controls">
+        <div class="controls" id="players-controls">
             <div class="player-card">
                 <h3>玩家 A</h3>
                 <p>移动：W A S D</p>
@@ -40,23 +45,47 @@
                 <p>技能：8 9 0 - =</p>
                 <p id="p2-status">当前选择：等待中...</p>
             </div>
+            <div class="player-card p3 hidden" id="card-p3">
+                <h3>玩家 C</h3>
+                <p>移动：T F G H</p>
+                <p>法系：Y(火) U(水) I(土) O(风) P(电)</p>
+                <p>技能：Y U I O P</p>
+                <p id="p3-status">当前选择：等待中...</p>
+            </div>
+            <div class="player-card p4 hidden" id="card-p4">
+                <h3>玩家 D</h3>
+                <p>移动：I J K L</p>
+                <p>法系：Z(火) X(水) C(土) V(风) B(电)</p>
+                <p>技能：Z X C V B</p>
+                <p id="p4-status">当前选择：等待中...</p>
+            </div>
         </div>
-        <h2 id="start-tip">本地模式：双方在同一台电脑选择法系后自动开始</h2>
+        <h2 id="start-tip">本地模式：所有玩家选择法系后自动开始</h2>
     </div>
     
     <!-- 2. 游戏对战界面 -->
     <div id="game-screen" class="hidden">
         <canvas id="gameCanvas" width="1000" height="600"></canvas>
         <div class="ui-layer">
-            <div class="player-ui left">
+            <div class="player-ui left" id="ui-p1">
                 <div class="health-bar-container"><div class="health-bar" id="p1-hp"></div></div>
                 <div class="mana-bar-container"><div class="mana-bar" id="p1-mp"></div></div>
                 <div class="skills-ui" id="p1-skills"></div>
             </div>
-            <div class="player-ui right">
+            <div class="player-ui right" id="ui-p2">
                 <div class="health-bar-container"><div class="health-bar" id="p2-hp"></div></div>
                 <div class="mana-bar-container"><div class="mana-bar" id="p2-mp"></div></div>
                 <div class="skills-ui" id="p2-skills"></div>
+            </div>
+            <div class="player-ui bottom-left hidden" id="ui-p3">
+                <div class="health-bar-container"><div class="health-bar" id="p3-hp"></div></div>
+                <div class="mana-bar-container"><div class="mana-bar" id="p3-mp"></div></div>
+                <div class="skills-ui" id="p3-skills"></div>
+            </div>
+            <div class="player-ui bottom-right hidden" id="ui-p4">
+                <div class="health-bar-container"><div class="health-bar" id="p4-hp"></div></div>
+                <div class="mana-bar-container"><div class="mana-bar" id="p4-mp"></div></div>
+                <div class="skills-ui" id="p4-skills"></div>
             </div>
         </div>
         <div id="countdown-overlay" class="countdown-overlay hidden">

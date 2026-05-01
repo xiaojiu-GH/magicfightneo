@@ -129,8 +129,8 @@ const ctx = canvas.getContext('2d');
 
 const configA = { id: 'A', startX: 150, startY: 150, color: '#2ecc71', keys: { up: 'w', down: 's', left: 'a', right: 'd', skill1: '1', skill2: '2', skill3: '3', skill4: '4', skill5: '5' } };
 const configB = { id: 'B', startX: 850, startY: 150, color: '#e74c3c', keys: { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', skill1: '8', skill2: '9', skill3: '0', skill4: '-', skill5: '=' } };
-const configC = { id: 'C', startX: 150, startY: 450, color: '#2980b9', keys: { up: 't', down: 'g', left: 'f', right: 'h', skill1: 'y', skill2: 'u', skill3: 'i', skill4: 'o', skill5: 'p' } };
-const configD = { id: 'D', startX: 850, startY: 450, color: '#f39c12', keys: { up: 'i', down: 'k', left: 'j', right: 'l', skill1: 'z', skill2: 'x', skill3: 'c', skill4: 'v', skill5: 'b' } };
+const configC = { id: 'C', startX: 150, startY: 450, color: '#3498db', keys: {} };
+const configD = { id: 'D', startX: 850, startY: 450, color: '#f1c40f', keys: {} };
 const playerConfigs = { 'A': configA, 'B': configB, 'C': configC, 'D': configD };
 
 const networkStatusEl = document.getElementById('network-status');
@@ -251,15 +251,9 @@ function updateStartTip() {
 }
 
 function setSelectionStatusDefaults() {
-    ['p1-status', 'p2-status', 'p3-status', 'p4-status'].forEach((id, idx) => {
+    ['p1-status', 'p2-status', 'p3-status', 'p4-status'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) {
-            if (idx < targetPlayerCount) {
-                el.innerText = '当前选择：等待中...';
-            } else {
-                el.innerText = '未参与';
-            }
-        }
+        if(el) el.innerText = '当前选择：等待中...';
     });
 }
 
@@ -307,8 +301,6 @@ function resetRuntimeState() {
     playerClasses = { A: null, B: null, C: null, D: null };
     p1 = null;
     p2 = null;
-    p3 = null;
-    p4 = null;
     entities = [];
     particles = [];
     remoteKeys = {};
@@ -402,15 +394,9 @@ function setupConnection(conn, guestId) {
             Object.keys(remoteKeys).forEach(k => {
                 if (k.startsWith(guestId + '_')) delete remoteKeys[k];
             });
-            // Kill the player if they disconnect during battle
-            if (currentState === GameState.BATTLE) {
-                const p = playersList.find(p => p.config.id === guestId);
-                if (p) p.hp = 0;
-            }
         } else {
             setNetworkStatus('连接已断开，可重新创建或加入房间', 'error');
         }
-        updateStartTip();
     });
 
     conn.on('error', () => {
@@ -491,28 +477,6 @@ function copyRoomCode() {
     });
 }
 
-function updatePlayerCardsVisibility() {
-    document.getElementById('card-p3').classList.toggle('hidden', targetPlayerCount < 3);
-    document.getElementById('card-p4').classList.toggle('hidden', targetPlayerCount < 4);
-    
-    // Clear selections if reduced
-    if (targetPlayerCount < 4) {
-        playerClasses.D = null;
-        const el = document.getElementById('p4-status');
-        if (el) el.innerText = '当前选择：等待中...';
-    }
-    if (targetPlayerCount < 3) {
-        playerClasses.C = null;
-        const el = document.getElementById('p3-status');
-        if (el) el.innerText = '当前选择：等待中...';
-    }
-}
-
-playerCountSelect.addEventListener('change', (e) => {
-    targetPlayerCount = parseInt(e.target.value);
-    updatePlayerCardsVisibility();
-});
-
 localBtn.addEventListener('click', switchToLocalMode);
 hostBtn.addEventListener('click', createRoom);
 joinBtn.addEventListener('click', joinRoom);
@@ -552,7 +516,7 @@ function scheduleStartIfReady() {
 function handleSelectionInput(key) {
     if (currentState !== GameState.SELECTION) return;
 
-    const classMap = { '1': '火系', '2': '水系', '3': '土系', '4': '风系', '5': '电系', '6': '电系', '7': '风系', '8': '火系', '9': '水系', '0': '土系', 'y': '火系', 'u': '水系', 'i': '土系', 'o': '风系', 'p': '电系', 'z': '火系', 'x': '水系', 'c': '土系', 'v': '风系', 'b': '电系' };
+    const classMap = { '1': '火系', '2': '水系', '3': '土系', '4': '风系', '5': '电系', '6': '电系', '7': '风系', '8': '火系', '9': '水系', '0': '土系' };
     const allKeysMap = { ...classMap };
 
     if (networkMode === NetworkMode.LOCAL) {
@@ -561,19 +525,9 @@ function handleSelectionInput(key) {
             document.getElementById('p1-status').innerText = `当前选择：${playerClasses.A}`;
             soundManager.select();
         }
-        if (targetPlayerCount >= 2 && ['6', '7', '8', '9', '0'].includes(key)) {
+        if (['6', '7', '8', '9', '0'].includes(key)) {
             playerClasses.B = classMap[key];
             document.getElementById('p2-status').innerText = `当前选择：${playerClasses.B}`;
-            soundManager.select();
-        }
-        if (targetPlayerCount >= 3 && ['y', 'u', 'i', 'o', 'p'].includes(key)) {
-            playerClasses.C = classMap[key];
-            document.getElementById('p3-status').innerText = `当前选择：${playerClasses.C}`;
-            soundManager.select();
-        }
-        if (targetPlayerCount >= 4 && ['z', 'x', 'c', 'v', 'b'].includes(key)) {
-            playerClasses.D = classMap[key];
-            document.getElementById('p4-status').innerText = `当前选择：${playerClasses.D}`;
             soundManager.select();
         }
         scheduleStartIfReady();
@@ -588,7 +542,7 @@ function handleSelectionInput(key) {
         scheduleStartIfReady();
     }
 
-    if (networkRole === NetworkRole.GUEST && allKeysMap[key]) {
+    if (networkRole === NetworkRole.GUEST && (['1', '2', '3', '4', '5'].includes(key) || ['6', '7', '8', '9', '0'].includes(key))) {
         playerClasses[myPlayerId] = allKeysMap[key];
         const el = document.getElementById(`p${myPlayerId.charCodeAt(0)-64}-status`);
         if (el) el.innerText = `当前选择：${playerClasses[myPlayerId]}`;
@@ -609,7 +563,6 @@ function handleNetworkMessage(message, guestId) {
     if (message.type === 'host-welcome' && networkRole === NetworkRole.GUEST) {
         myPlayerId = message.guestId;
         targetPlayerCount = message.targetPlayerCount;
-        updatePlayerCardsVisibility();
         setNetworkStatus(`已连接主机，你的身份是 玩家 ${myPlayerId}`, 'success');
         updateStartTip();
         return;
@@ -1431,7 +1384,7 @@ class AoE {
         this.timer += dt;
 
         if (this.type === 'railgun') {
-            const enemy = getClosestEnemy(this.owner);
+            const enemy = this.owner === p1 ? p2 : p1;
             // Calculate angle to current target position
             let currentAngle = Math.atan2(this.y - this.owner.y, this.x - this.owner.x);
             // Calculate angle to enemy
@@ -2014,7 +1967,7 @@ function gameLoop(time) {
         maybeSendSnapshot();
     } else {
         // 客机端进行视觉上的插值（外推），让飞行物和粒子平滑移动
-        if (playersList.length > 0) {
+        if (p1 && p2) {
             // 客机端进行简单的移动预测
             playersList.forEach(p => {
                 if (!p.hasStatus('root') && !p.hasStatus('knockup') && !p.hasStatus('paralyze')) {
