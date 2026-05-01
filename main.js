@@ -129,8 +129,8 @@ const ctx = canvas.getContext('2d');
 
 const configA = { id: 'A', startX: 150, startY: 150, color: '#2ecc71', keys: { up: 'w', down: 's', left: 'a', right: 'd', skill1: '1', skill2: '2', skill3: '3', skill4: '4', skill5: '5' } };
 const configB = { id: 'B', startX: 850, startY: 150, color: '#e74c3c', keys: { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', skill1: '8', skill2: '9', skill3: '0', skill4: '-', skill5: '=' } };
-const configC = { id: 'C', startX: 150, startY: 450, color: '#2980b9', keys: { up: 't', down: 'g', left: 'f', right: 'h', skill1: 'y', skill2: 'u', skill3: 'i', skill4: 'o', skill5: 'p' } };
-const configD = { id: 'D', startX: 850, startY: 450, color: '#f39c12', keys: { up: 'i', down: 'k', left: 'j', right: 'l', skill1: 'z', skill2: 'x', skill3: 'c', skill4: 'v', skill5: 'b' } };
+const configC = { id: 'C', startX: 150, startY: 450, color: '#2980b9', keys: { up: 'w', down: 's', left: 'a', right: 'd', skill1: '1', skill2: '2', skill3: '3', skill4: '4', skill5: '5' } };
+const configD = { id: 'D', startX: 850, startY: 450, color: '#f39c12', keys: { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', skill1: '8', skill2: '9', skill3: '0', skill4: '-', skill5: '=' } };
 const playerConfigs = { 'A': configA, 'B': configB, 'C': configC, 'D': configD };
 
 const networkStatusEl = document.getElementById('network-status');
@@ -251,10 +251,11 @@ function updateStartTip() {
 }
 
 function setSelectionStatusDefaults() {
+    let actualTargetCount = (networkMode === NetworkMode.LOCAL) ? 2 : targetPlayerCount;
     ['p1-status', 'p2-status', 'p3-status', 'p4-status'].forEach((id, idx) => {
         const el = document.getElementById(id);
         if (el) {
-            if (idx < targetPlayerCount) {
+            if (idx < actualTargetCount) {
                 el.innerText = '当前选择：等待中...';
             } else {
                 el.innerText = '未参与';
@@ -351,6 +352,7 @@ function cleanupConnection(keepMode = false) {
 function switchToLocalMode() {
     cleanupConnection();
     resetRuntimeState();
+    updatePlayerCardsVisibility();
     setNetworkStatus('当前为本地双人模式', 'normal');
 }
 
@@ -492,16 +494,17 @@ function copyRoomCode() {
 }
 
 function updatePlayerCardsVisibility() {
-    document.getElementById('card-p3').classList.toggle('hidden', targetPlayerCount < 3);
-    document.getElementById('card-p4').classList.toggle('hidden', targetPlayerCount < 4);
+    let actualTargetCount = (networkMode === NetworkMode.LOCAL) ? 2 : targetPlayerCount;
+    document.getElementById('card-p3').classList.toggle('hidden', actualTargetCount < 3);
+    document.getElementById('card-p4').classList.toggle('hidden', actualTargetCount < 4);
     
     // Clear selections if reduced
-    if (targetPlayerCount < 4) {
+    if (actualTargetCount < 4) {
         playerClasses.D = null;
         const el = document.getElementById('p4-status');
         if (el) el.innerText = '当前选择：等待中...';
     }
-    if (targetPlayerCount < 3) {
+    if (actualTargetCount < 3) {
         playerClasses.C = null;
         const el = document.getElementById('p3-status');
         if (el) el.innerText = '当前选择：等待中...';
@@ -510,6 +513,9 @@ function updatePlayerCardsVisibility() {
 
 playerCountSelect.addEventListener('change', (e) => {
     targetPlayerCount = parseInt(e.target.value);
+    if (networkMode === NetworkMode.LOCAL && targetPlayerCount > 2) {
+        setNetworkStatus('注意：本地模式只支持双人，请点击"创建房间"进行多人联机', 'normal');
+    }
     updatePlayerCardsVisibility();
 });
 
@@ -531,17 +537,19 @@ returnLobbyBtn.addEventListener('click', returnToLobby);
 
 function scheduleStartIfReady() {
     if (startScheduled || currentState !== GameState.SELECTION) return;
+    
+    let actualTargetCount = (networkMode === NetworkMode.LOCAL) ? 2 : targetPlayerCount;
     let readyCount = 0;
-    for (let i = 0; i < targetPlayerCount; i++) {
+    for (let i = 0; i < actualTargetCount; i++) {
         if (playerClasses[String.fromCharCode(65 + i)]) readyCount++;
     }
-    if (readyCount < targetPlayerCount) return;
+    if (readyCount < actualTargetCount) return;
     if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST && !isGuestConnected()) return;
 
     startScheduled = true;
     setTimeout(() => {
         startScheduled = false;
-        if (readyCount < targetPlayerCount || currentState !== GameState.SELECTION) return;
+        if (readyCount < actualTargetCount || currentState !== GameState.SELECTION) return;
         if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
             broadcast({ type: 'start', classes: playerClasses });
         }
@@ -552,7 +560,7 @@ function scheduleStartIfReady() {
 function handleSelectionInput(key) {
     if (currentState !== GameState.SELECTION) return;
 
-    const classMap = { '1': '火系', '2': '水系', '3': '土系', '4': '风系', '5': '电系', '6': '电系', '7': '风系', '8': '火系', '9': '水系', '0': '土系', 'y': '火系', 'u': '水系', 'i': '土系', 'o': '风系', 'p': '电系', 'z': '火系', 'x': '水系', 'c': '土系', 'v': '风系', 'b': '电系' };
+    const classMap = { '1': '火系', '2': '水系', '3': '土系', '4': '风系', '5': '电系', '6': '电系', '7': '风系', '8': '火系', '9': '水系', '0': '土系' };
     const allKeysMap = { ...classMap };
 
     if (networkMode === NetworkMode.LOCAL) {
@@ -561,19 +569,9 @@ function handleSelectionInput(key) {
             document.getElementById('p1-status').innerText = `当前选择：${playerClasses.A}`;
             soundManager.select();
         }
-        if (targetPlayerCount >= 2 && ['6', '7', '8', '9', '0'].includes(key)) {
+        if (['6', '7', '8', '9', '0'].includes(key)) {
             playerClasses.B = classMap[key];
             document.getElementById('p2-status').innerText = `当前选择：${playerClasses.B}`;
-            soundManager.select();
-        }
-        if (targetPlayerCount >= 3 && ['y', 'u', 'i', 'o', 'p'].includes(key)) {
-            playerClasses.C = classMap[key];
-            document.getElementById('p3-status').innerText = `当前选择：${playerClasses.C}`;
-            soundManager.select();
-        }
-        if (targetPlayerCount >= 4 && ['z', 'x', 'c', 'v', 'b'].includes(key)) {
-            playerClasses.D = classMap[key];
-            document.getElementById('p4-status').innerText = `当前选择：${playerClasses.D}`;
             soundManager.select();
         }
         scheduleStartIfReady();
@@ -1621,7 +1619,7 @@ function drawPlayerShape(ctx, player) {
     let playerColor = player.config.color; // 默认老版本颜色
     const classCounts = {};
     playersList.forEach(p => {
-        if(p.hp > 0) classCounts[p.className] = (classCounts[p.className] || 0) + 1;
+        classCounts[p.className] = (classCounts[p.className] || 0) + 1;
     });
     if (classCounts[player.className] === 1) {
         if (player.className === '火系') playerColor = '#e74c3c'; // 红色
@@ -1976,7 +1974,8 @@ function startGame() {
     playersList = [];
 
     const ids = ['A', 'B', 'C', 'D'];
-    for (let i = 0; i < targetPlayerCount; i++) {
+    let actualTargetCount = (networkMode === NetworkMode.LOCAL) ? 2 : targetPlayerCount;
+    for (let i = 0; i < actualTargetCount; i++) {
         const id = ids[i];
         if (playerClasses[id]) {
             const p = new Player(playerConfigs[id], playerClasses[id]);
@@ -1992,7 +1991,7 @@ function startGame() {
     ['ui-p1', 'ui-p2', 'ui-p3', 'ui-p4'].forEach((uiId, idx) => {
         const el = document.getElementById(uiId);
         if (el) {
-            if (idx < targetPlayerCount) el.classList.remove('hidden');
+            if (idx < actualTargetCount) el.classList.remove('hidden');
             else el.classList.add('hidden');
         }
     });
