@@ -301,9 +301,9 @@ const SkillData = {
         skills: [
             { id: 'lightbolt', name: '圣光弹', cd: 2, cost: 10, keyName: '1/8', desc: '发射圣光弹，命中敌人造成伤害，如果命中队友则轻微治疗' },
             { id: 'healingaura', name: '治疗光环', cd: 15, cost: 40, keyName: '2/9', desc: '在自身周围生成治疗光环，持续恢复自己和队友的生命值' },
-            { id: 'holyshield', name: '圣盾术', cd: 18, cost: 45, keyName: '3/0', desc: '为自己附加一个无敌护盾，持续2秒' },
-            { id: 'blindingflash', name: '致盲闪光', cd: 12, cost: 30, keyName: '4/-', desc: '对周围敌人造成致盲效果，使其屏幕短暂变白' },
-            { id: 'judgment', name: '裁决之光', cd: 20, cost: 60, keyName: '5/=', desc: '召唤巨大的光剑劈向敌人，造成巨额真实伤害' }
+            { id: 'holyshield', name: '圣盾术', cd: 18, cost: 45, keyName: '3/0', desc: '为自己附加一个高额护盾' },
+            { id: 'lightbind', name: '圣光束缚', cd: 12, cost: 30, keyName: '4/-', desc: '在目标脚下召唤光柱，短暂延迟后禁锢敌人' },
+            { id: 'judgment', name: '裁决之光', cd: 20, cost: 60, keyName: '5/=', desc: '召唤巨大的光剑劈向敌人，造成巨额伤害' }
         ]
     },
     '暗系': {
@@ -1188,9 +1188,15 @@ class Player {
                 (sourceClass === '土系' && this.className === '水系') ||
                 (sourceClass === '水系' && this.className === '火系') ||
                 (sourceClass === '电系' && (this.className === '土系' || this.className === '火系')) ||
-                (sourceClass === '水系' && this.className === '电系')) {
+                (sourceClass === '水系' && this.className === '电系') ||
+                (sourceClass === '光系' && this.className === '暗系') ||
+                (sourceClass === '暗系' && this.className === '光系')) {
                 finalDamage *= 1.2;
             }
+        }
+
+        if (this.hasStatus('deathdescent')) {
+            finalDamage *= 0.5; // 50% damage reduction during death descent
         }
 
         if (this.shieldAmount > 0) {
@@ -1411,8 +1417,20 @@ class Player {
                 dx /= len;
                 dy /= len;
             }
-            this.x += dx * this.speed * dt;
-            this.y += dy * this.speed * dt;
+            
+            let currentSpeed = this.speed;
+            if (this.hasStatus('deathdescent')) {
+                currentSpeed *= 1.5; // 50% speed boost during death descent
+            }
+            if (this.hasStatus('haste')) {
+                currentSpeed *= 1.6;
+            }
+            if (this.hasStatus('slow')) {
+                currentSpeed *= 0.5;
+            }
+
+            this.x += dx * currentSpeed * dt;
+            this.y += dy * currentSpeed * dt;
             this.x = Math.max(this.radius, Math.min(canvas.width - this.radius, this.x));
             this.y = Math.max(this.radius, Math.min(canvas.height - this.radius, this.y));
         }
@@ -1692,11 +1710,11 @@ class Player {
                 this.shieldAmount += 50;
                 createExplosion(this.x, this.y, '#f39c12', 20, 100, 0.5, 3);
                 break;
-            case 'blindingflash':
-                entities.push(new AoE(this, this.x, this.y, 200, 0.5, '#f39c12', 'blindingflash', target => {
+            case 'lightbind':
+                entities.push(new AoE(this, enemy.x, enemy.y, 80, 0.6, '#f39c12', 'lightbind', target => {
                     if (isEnemy(target, this)) {
-                        target.takeDamage(15, this.className, this);
-                        target.addStatus('blind', 2); // reuse or create blind status logic
+                        target.takeDamage(20, this.className, this);
+                        target.addStatus('root', 2.5);
                     }
                 }));
                 break;
@@ -1722,6 +1740,10 @@ class Player {
                     target.addStatus('slow', 3);
                     this.hp = Math.min(this.maxHp, this.hp + 20);
                     this.updateUI();
+                    floatingTexts.push(new FloatingText(this.x, this.y, '+20', '#2ecc71', 20));
+                    if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                        networkEvents.push({ type: 'floatingText', x: this.x, y: this.y, text: '+20', color: '#2ecc71', size: 20 });
+                    }
                 }));
                 break;
             case 'fearscream':
@@ -2274,11 +2296,55 @@ function drawPlayerShape(ctx, player) {
     if (player.isDowned) {
         ctx.ellipse(player.x, drawY + player.radius / 2, player.radius, player.radius / 2, 0, 0, Math.PI * 2);
         ctx.globalAlpha = 0.5; // Draw slightly transparent
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
     } else {
         ctx.arc(player.x, drawY, player.radius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        if (player.className === '光系') {
+            // Light faction glow effect
+            ctx.save();
+            ctx.translate(player.x, drawY);
+            ctx.beginPath();
+            ctx.arc(0, 0, player.radius + 5, 0, Math.PI * 2);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(241, 196, 15, 0.8)'; // Yellowish glow
+            ctx.stroke();
+            
+            // Add a cross inside
+            ctx.beginPath();
+            ctx.moveTo(0, -player.radius + 2);
+            ctx.lineTo(0, player.radius - 2);
+            ctx.moveTo(-player.radius + 2, 0);
+            ctx.lineTo(player.radius - 2, 0);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.stroke();
+            ctx.restore();
+        } else if (player.className === '暗系') {
+            // Dark faction shadow aura
+            ctx.save();
+            ctx.translate(player.x, drawY);
+            
+            // Outer shadow ring
+            ctx.beginPath();
+            ctx.arc(0, 0, player.radius + 8, 0, Math.PI * 2);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(142, 68, 173, 0.6)'; // Purple aura
+            ctx.setLineDash([5, 5]);
+            ctx.rotate(performance.now() / 1000);
+            ctx.stroke();
+            
+            // Inner dark core
+            ctx.beginPath();
+            ctx.arc(0, 0, player.radius - 4, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fill();
+            
+            ctx.restore();
+        }
     }
-    ctx.fill();
-    ctx.globalAlpha = 1.0;
 
     const hasBlind = player.hasStatus ? player.hasStatus('blind') : player.statuses.some(s => s.type === 'blind');
     if (hasBlind && player.config.id === myPlayerId) {
