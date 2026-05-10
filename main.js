@@ -1153,6 +1153,7 @@ class Player {
         let finalSpeed = this.baseSpeed;
         if (this.hasStatus('slow')) finalSpeed *= 0.6;
         if (this.hasStatus('haste')) finalSpeed *= 1.6;
+        if (this.hasStatus('deathdescent')) finalSpeed *= 1.5;
         return finalSpeed;
     }
 
@@ -1379,6 +1380,7 @@ class Player {
             if (s.duration <= 0) {
                 if (s.type === 'deathdescent') {
                     this.hp = Math.max(1, this.hp - 10); // Penalty when ending
+                    this.updateUI();
                 }
                 if (s.type === 'shield') {
                     const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
@@ -1418,19 +1420,8 @@ class Player {
                 dy /= len;
             }
             
-            let currentSpeed = this.speed;
-            if (this.hasStatus('deathdescent')) {
-                currentSpeed *= 1.5; // 50% speed boost during death descent
-            }
-            if (this.hasStatus('haste')) {
-                currentSpeed *= 1.6;
-            }
-            if (this.hasStatus('slow')) {
-                currentSpeed *= 0.5;
-            }
-
-            this.x += dx * currentSpeed * dt;
-            this.y += dy * currentSpeed * dt;
+            this.x += dx * this.speed * dt;
+            this.y += dy * this.speed * dt;
             this.x = Math.max(this.radius, Math.min(canvas.width - this.radius, this.x));
             this.y = Math.max(this.radius, Math.min(canvas.height - this.radius, this.y));
         }
@@ -2473,6 +2464,32 @@ function drawProjectileShape(ctx, projectile) {
         ctx.beginPath();
         ctx.arc(0, 0, projectile.radius + Math.random() * 5, 0, Math.PI * 2);
         ctx.stroke();
+    } else if (projectile.type === 'lightbolt') {
+        // Lightbolt: golden star/cross
+        ctx.strokeStyle = '#f39c12';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(-projectile.radius, 0);
+        ctx.lineTo(projectile.radius, 0);
+        ctx.moveTo(0, -projectile.radius);
+        ctx.lineTo(0, projectile.radius);
+        ctx.stroke();
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.arc(0, 0, projectile.radius * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+    } else if (projectile.type === 'shadowball' || projectile.type === 'vampirictouch') {
+        // Shadowball: pulsating dark core with purple aura
+        ctx.fillStyle = '#8e44ad';
+        ctx.globalAlpha = 0.5 + 0.5 * Math.sin(performance.now() / 150);
+        ctx.beginPath();
+        ctx.arc(0, 0, projectile.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#2c3e50';
+        ctx.globalAlpha = 1.0;
+        ctx.beginPath();
+        ctx.arc(0, 0, projectile.radius * 0.5, 0, Math.PI * 2);
+        ctx.fill();
     } else {
         ctx.fillStyle = projectile.color;
         ctx.beginPath();
@@ -2516,13 +2533,63 @@ function drawAoEShape(ctx, aoe) {
         return;
     }
 
-    if (['fireblast', 'meteor', 'blizzard', 'earthquake', 'hurricane'].includes(aoe.type)) {
+    if (['fireblast', 'meteor', 'blizzard', 'earthquake', 'hurricane', 'healingaura', 'judgment', 'lightbind', 'fearscream', 'abyssswamp'].includes(aoe.type)) {
         ctx.strokeStyle = aoe.color;
         ctx.lineWidth = aoe.type === 'earthquake' ? 5 : 2;
         ctx.beginPath();
         const radius = aoe.type === 'earthquake' ? aoe.radius * (aoe.timer / aoe.delay) : aoe.radius;
         ctx.arc(aoe.x, aoe.y, radius, 0, Math.PI * 2);
         ctx.stroke();
+        
+        if (aoe.type === 'judgment') {
+            ctx.fillStyle = '#f39c12';
+            ctx.globalAlpha = 0.6 * (aoe.timer / aoe.delay);
+            ctx.fillRect(aoe.x - 10, aoe.y - 200 * (aoe.timer / aoe.delay), 20, 200 * (aoe.timer / aoe.delay));
+        } else if (aoe.type === 'lightbind') {
+            ctx.strokeStyle = '#f1c40f';
+            ctx.setLineDash([5, 5]);
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(aoe.x, aoe.y, aoe.radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        } else if (aoe.type === 'healingaura') {
+            ctx.strokeStyle = '#2ecc71';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([10, 10]);
+            ctx.beginPath();
+            ctx.arc(aoe.x, aoe.y, aoe.radius * 0.8, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // Plus symbols
+            ctx.fillStyle = '#2ecc71';
+            ctx.globalAlpha = 0.5 + 0.5 * Math.sin(performance.now() / 150);
+            ctx.fillRect(aoe.x - 2, aoe.y - 15, 4, 10);
+            ctx.fillRect(aoe.x - 5, aoe.y - 12, 10, 4);
+        } else if (aoe.type === 'fearscream') {
+            ctx.strokeStyle = '#8e44ad';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            const progress = 1 - (aoe.timer / aoe.delay); // Expands outwards
+            ctx.arc(aoe.x, aoe.y, aoe.radius * progress, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 0.2;
+            ctx.fillStyle = '#8e44ad';
+            ctx.fill();
+        } else if (aoe.type === 'abyssswamp') {
+            ctx.fillStyle = '#8e44ad';
+            ctx.globalAlpha = 0.3 + 0.1 * Math.sin(performance.now() / 300);
+            ctx.beginPath();
+            ctx.arc(aoe.x, aoe.y, aoe.radius, 0, Math.PI * 2);
+            ctx.fill();
+            // Swamp bubbles
+            ctx.fillStyle = '#2c3e50';
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.arc(aoe.x + Math.sin(performance.now()/200)*20, aoe.y + Math.cos(performance.now()/250)*20, 5, 0, Math.PI*2);
+            ctx.arc(aoe.x - Math.cos(performance.now()/150)*30, aoe.y + Math.sin(performance.now()/200)*15, 8, 0, Math.PI*2);
+            ctx.fill();
+        }
     } else if (aoe.type === 'waterprison') {
         ctx.fillStyle = aoe.color;
         ctx.globalAlpha = 0.4;
