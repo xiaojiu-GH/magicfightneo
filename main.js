@@ -1727,6 +1727,7 @@ class Player {
                 break;
             case 'holyshield':
                 this.shieldAmount += 50;
+                this.addStatus('shield', 4); // Shield lasts for 4 seconds
                 createExplosion(this.x, this.y, '#f39c12', 20, 100, 0.5, 3);
                 break;
             case 'lightbind':
@@ -1974,7 +1975,13 @@ class Projectile {
         }
 
         for (const enemy of playersList) {
-            if (!isEnemy(enemy, this.owner) || (enemy.hp <= 0 && !enemy.isDowned)) continue;
+            let skip = false;
+            if (this.type === 'lightbolt') {
+                skip = enemy === this.owner || (enemy.hp <= 0 && !enemy.isDowned);
+            } else {
+                skip = !isEnemy(enemy, this.owner) || (enemy.hp <= 0 && !enemy.isDowned);
+            }
+            if (skip) continue;
             const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
             if (dist < this.radius + enemy.radius && !this.hitTargets.has(enemy.config.id)) {
             this.onHit(enemy);
@@ -1998,6 +2005,10 @@ class Projectile {
                 createExplosion(this.x, this.y, '#f1c40f', 5, 80, 0.2, 2);
             } else if (this.type === 'balllightning') {
                 createExplosion(this.x, this.y, '#f1c40f', 20, 150, 0.5, 4);
+            } else if (this.type === 'lightbolt') {
+                createExplosion(this.x, this.y, '#f39c12', 10, 80, 0.4, 4);
+            } else if (this.type === 'shadowball' || this.type === 'vampirictouch') {
+                createExplosion(this.x, this.y, '#8e44ad', 10, 90, 0.5, 4);
             }
         }
         }
@@ -2162,7 +2173,14 @@ class AoE {
                 }
             } else {
                 for (const e of playersList) {
-                    if (!isEnemy(e, this.owner) || (e.hp <= 0 && !e.isDowned)) continue;
+                    let skip = false;
+                    if (this.type === 'healingaura') {
+                        skip = isEnemy(e, this.owner) || (e.hp <= 0 && !e.isDowned);
+                    } else {
+                        skip = !isEnemy(e, this.owner) || (e.hp <= 0 && !e.isDowned);
+                    }
+                    if (skip) continue;
+                    
                     const dist = Math.hypot(this.x - e.x, this.y - e.y);
                     if (dist < this.radius + e.radius) {
                         this.onHit(e);
