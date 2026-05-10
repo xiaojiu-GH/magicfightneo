@@ -124,6 +124,51 @@ class SoundManager {
 }
 
 const soundManager = new SoundManager();
+
+let floatingTexts = [];
+let screenShake = 0;
+
+class FloatingText {
+    constructor(x, y, text, color, size = 20) {
+        this.x = x + (Math.random() - 0.5) * 30;
+        this.y = y - 20;
+        this.text = text;
+        this.color = color;
+        this.size = size;
+        this.life = 1.0;
+        this.maxLife = 1.0;
+        this.vy = -30;
+    }
+    update(dt) {
+        this.y += this.vy * dt;
+        this.life -= dt;
+    }
+    draw(ctx) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, this.life / this.maxLife);
+        ctx.fillStyle = this.color;
+        ctx.font = `bold ${this.size}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 2;
+        ctx.strokeText(this.text, this.x, this.y);
+        ctx.fillText(this.text, this.x, this.y);
+        ctx.restore();
+    }
+}
+
+function triggerKillFeed(killerId, victimId) {
+    const feed = document.getElementById('kill-feed');
+    if (!feed) return;
+    const item = document.createElement('div');
+    item.className = 'kill-feed-item';
+    item.textContent = `玩家 ${killerId} 击杀了 玩家 ${victimId}`;
+    feed.appendChild(item);
+    setTimeout(() => {
+        if (item.parentNode) item.parentNode.removeChild(item);
+    }, 3000);
+}
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
@@ -139,6 +184,7 @@ const roomIdInput = document.getElementById('room-id-input');
 const startTipEl = document.getElementById('start-tip');
 const localBtn = document.getElementById('local-mode-btn');
 const playerCountSelect = document.getElementById('player-count-select');
+const gameModeSelect = document.getElementById('game-mode-select');
 const hostBtn = document.getElementById('host-room-btn');
 const joinBtn = document.getElementById('join-room-btn');
 const copyRoomBtn = document.getElementById('copy-room-btn');
@@ -149,6 +195,7 @@ const countdownOverlayEl = document.getElementById('countdown-overlay');
 const countdownTextEl = document.getElementById('countdown-text');
 
 let targetPlayerCount = 2;
+let gameMode = 'ffa'; // 'ffa' (Free For All) or '2v2'
 let playerClasses = { A: null, B: null, C: null, D: null };
 let p1 = null, p2 = null, p3 = null, p4 = null;
 let playersList = [];
@@ -158,6 +205,9 @@ let lastTime = 0;
 let animationStarted = false;
 let startScheduled = false;
 let countdownTimer = null;
+
+let myPlayerId = 'A'; // defaults to A for host/local
+let currentSessionStats = { kills: 0, damage: 0 };
 
 const keys = {};
 let remoteKeys = {};
@@ -172,6 +222,28 @@ let nextGuestId = 'B';
 let roomId = '';
 let lastSnapshotSent = 0;
 let networkEvents = [];
+
+// Matchmaking State
+let mqttClient = null;
+let isMatching = false;
+let matchCheckInterval = null;
+let becomeHostTimer = null;
+let matchTimerInterval = null;
+let matchStartTime = 0;
+
+// Auth & Stats System
+let currentUser = null;
+function getAccounts() {
+    return JSON.parse(localStorage.getItem('accounts') || '{}');
+}
+function saveAccounts(accs) {
+    localStorage.setItem('accounts', JSON.stringify(accs));
+}
+function initAuth() {
+    const saved = localStorage.getItem('currentUser');
+    if (saved) currentUser = saved;
+    updateAuthUI();
+}
 
 const SkillData = {
     '火系': {
@@ -223,19 +295,47 @@ const SkillData = {
             { id: 'thunderstrike', name: '落雷', cd: 10, cost: 30, keyName: '4/-', desc: '在鼠标位置召唤落雷，小范围高伤害并附带麻痹' },
             { id: 'railgun', name: '超电磁炮', cd: 18, cost: 50, keyName: '5/=', desc: '蓄力后发射贯穿全图的闪电射线，造成巨额即时伤害' }
         ]
+    },
+    '光系': {
+        color: '#f39c12',
+        skills: [
+            { id: 'lightbolt', name: '圣光弹', cd: 2, cost: 10, keyName: '1/8', desc: '发射圣光弹，命中敌人造成伤害，如果命中队友则轻微治疗' },
+            { id: 'healingaura', name: '治疗光环', cd: 15, cost: 40, keyName: '2/9', desc: '在自身周围生成治疗光环，持续恢复自己和队友的生命值' },
+            { id: 'holyshield', name: '圣盾术', cd: 18, cost: 45, keyName: '3/0', desc: '为自己附加一个无敌护盾，持续2秒' },
+            { id: 'blindingflash', name: '致盲闪光', cd: 12, cost: 30, keyName: '4/-', desc: '对周围敌人造成致盲效果，使其屏幕短暂变白' },
+            { id: 'judgment', name: '裁决之光', cd: 20, cost: 60, keyName: '5/=', desc: '召唤巨大的光剑劈向敌人，造成巨额真实伤害' }
+        ]
+    },
+    '暗系': {
+        color: '#8e44ad',
+        skills: [
+            { id: 'shadowball', name: '暗影球', cd: 2.5, cost: 12, keyName: '1/8', desc: '发射缓慢飞行的暗影球，命中后吸取少量生命值' },
+            { id: 'vampirictouch', name: '吸血之触', cd: 10, cost: 30, keyName: '2/9', desc: '连接一个敌人，持续吸取其生命值并减速' },
+            { id: 'fearscream', name: '恐惧尖啸', cd: 15, cost: 35, keyName: '3/0', desc: '发出尖啸，使周围敌人陷入恐惧状态，不受控制地乱跑' },
+            { id: 'abyssswamp', name: '深渊泥潭', cd: 16, cost: 40, keyName: '4/-', desc: '在目标区域召唤深渊，持续造成伤害并大幅降低移速' },
+            { id: 'deathdescent', name: '死神降临', cd: 25, cost: 70, keyName: '5/=', desc: '进入死神形态，移速和伤害大幅提升，攻击附带吸血，持续8秒' }
+        ]
     }
 };
 
 function setNetworkStatus(text, tone = 'normal') {
     networkStatusEl.textContent = text;
     networkStatusEl.dataset.tone = tone;
+    
+    // Toggle chat visibility based on network mode
+    if (typeof lobbyChat !== 'undefined' && lobbyChat) {
+        if (networkMode === NetworkMode.ONLINE) {
+            lobbyChat.classList.remove('hidden');
+        } else {
+            lobbyChat.classList.add('hidden');
+        }
+    }
 }
 
 function setRoomCode(text) {
     roomCodeEl.textContent = text;
 }
 
-let myPlayerId = 'A'; // Host is A, Guest will receive from host
 function updateStartTip() {
     if (networkMode === NetworkMode.LOCAL) {
         startTipEl.textContent = '本地模式：双方在同一台电脑选择法系后自动开始';
@@ -384,7 +484,7 @@ function setupConnection(conn, guestId) {
     conn.on('open', () => {
         if (networkRole === NetworkRole.HOST) {
             setNetworkStatus(`客机已连接 (${Object.keys(connections).length}/${targetPlayerCount - 1})，等待选择法系`, 'success');
-            conn.send({ type: 'host-welcome', guestId: guestId, targetPlayerCount });
+            conn.send({ type: 'host-welcome', guestId: guestId, targetPlayerCount, gameMode });
             broadcast({ type: 'host-selection', classes: playerClasses });
         } else {
             setNetworkStatus('已连接主机，等待分配身份', 'success');
@@ -420,7 +520,7 @@ function setupConnection(conn, guestId) {
     });
 }
 
-function createRoom() {
+function createRoom(isQuickMatch = false) {
     if (!ensurePeerJs()) return;
     cleanupConnection(true);
     resetRuntimeState();
@@ -436,7 +536,28 @@ function createRoom() {
 
     peer = new window.Peer(roomId);
     peer.on('open', () => {
-        setNetworkStatus('房间已创建，把房间码发给朋友', 'success');
+        if (isQuickMatch === true) {
+            setNetworkStatus('正在匹配中 (作为房主)...', 'normal');
+            matchCheckInterval = setInterval(() => {
+                if (Object.keys(connections).length < targetPlayerCount - 1) {
+                    if (mqttClient) {
+                        const accs = getAccounts();
+                        const myElo = (currentUser && accs[currentUser]) ? (accs[currentUser].stats.elo || 1000) : 1000;
+                        mqttClient.publish('magic-battle-matchmaking-queue', JSON.stringify({
+                            type: 'HOSTING',
+                            roomId: roomId,
+                            gameMode: gameMode,
+                            targetPlayerCount: targetPlayerCount,
+                            elo: myElo
+                        }));
+                    }
+                } else {
+                    stopMatchmaking();
+                }
+            }, 2000);
+        } else {
+            setNetworkStatus('房间已创建，把房间码发给朋友', 'success');
+        }
     });
     peer.on('connection', conn => {
         if (Object.keys(connections).length >= targetPlayerCount - 1) {
@@ -452,9 +573,9 @@ function createRoom() {
     });
 }
 
-function joinRoom() {
+function joinRoom(targetId = null) {
     if (!ensurePeerJs()) return;
-    const targetRoomId = roomIdInput.value.trim();
+    const targetRoomId = (typeof targetId === 'string') ? targetId : roomIdInput.value.trim();
     if (!targetRoomId) {
         setNetworkStatus('请先输入房间码', 'error');
         return;
@@ -480,6 +601,106 @@ function joinRoom() {
         setNetworkStatus(`连接失败：${err.type || '未知错误'}`, 'error');
     });
 }
+
+// Quick Match Logic
+function startQuickMatch() {
+    if (!ensurePeerJs()) return;
+    if (typeof mqtt === 'undefined') {
+        setNetworkStatus('正在加载匹配组件，请稍后再试...', 'error');
+        return;
+    }
+
+    cleanupConnection(true);
+    resetRuntimeState();
+    networkMode = NetworkMode.ONLINE;
+    isMatching = true;
+    matchStartTime = Date.now();
+
+    document.getElementById('quick-match-btn').classList.add('hidden');
+    document.getElementById('cancel-match-btn').classList.remove('hidden');
+    document.getElementById('host-room-btn').classList.add('hidden');
+    document.getElementById('local-mode-btn').classList.add('hidden');
+    
+    setNetworkStatus('正在连接匹配服务器...', 'normal');
+
+    mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+
+    mqttClient.on('connect', () => {
+        mqttClient.subscribe('magic-battle-matchmaking-queue');
+        setNetworkStatus('匹配中 0s...', 'normal');
+        matchTimerInterval = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - matchStartTime) / 1000);
+            setNetworkStatus(`匹配中 ${elapsed}s...`, 'normal');
+            if (elapsed > 60) {
+                stopMatchmaking();
+                setNetworkStatus('匹配超时，请重试', 'error');
+                switchToLocalMode();
+            }
+        }, 1000);
+    });
+
+    let foundRoom = false;
+    becomeHostTimer = setTimeout(() => {
+        if (!foundRoom && isMatching) {
+            createRoom(true);
+        }
+    }, 3000);
+
+    mqttClient.on('message', (topic, message) => {
+        if (!isMatching) return;
+        try {
+            const data = JSON.parse(message.toString());
+            if (data.type === 'HOSTING' && data.gameMode === gameMode && data.targetPlayerCount === targetPlayerCount) {
+                const accs = getAccounts();
+                const myElo = (currentUser && accs[currentUser]) ? (accs[currentUser].stats.elo || 1000) : 1000;
+                const hostElo = data.elo || 1000;
+                const elapsed = Math.floor((Date.now() - matchStartTime) / 1000);
+                
+                // Elo tolerance expands by 10 points every second
+                const tolerance = 50 + (elapsed * 10);
+                if (Math.abs(myElo - hostElo) > tolerance) {
+                    return; // Ignore this host, Elo difference too high
+                }
+
+                if (networkRole === NetworkRole.HOST && roomId) {
+                    if (roomId > data.roomId) {
+                        // Yield to the other host to avoid split-brain
+                        stopMatchmaking();
+                        cleanupConnection(true);
+                        joinRoom(data.roomId);
+                    }
+                } else {
+                    // Found a room
+                    foundRoom = true;
+                    stopMatchmaking();
+                    joinRoom(data.roomId);
+                }
+            }
+        } catch (e) {}
+    });
+}
+
+function stopMatchmaking() {
+    isMatching = false;
+    if (matchCheckInterval) clearInterval(matchCheckInterval);
+    if (matchTimerInterval) clearInterval(matchTimerInterval);
+    if (becomeHostTimer) clearTimeout(becomeHostTimer);
+    if (mqttClient) {
+        mqttClient.end();
+        mqttClient = null;
+    }
+    document.getElementById('quick-match-btn').classList.remove('hidden');
+    document.getElementById('cancel-match-btn').classList.add('hidden');
+    document.getElementById('host-room-btn').classList.remove('hidden');
+    document.getElementById('local-mode-btn').classList.remove('hidden');
+}
+
+document.getElementById('quick-match-btn').addEventListener('click', startQuickMatch);
+document.getElementById('cancel-match-btn').addEventListener('click', () => {
+    stopMatchmaking();
+    switchToLocalMode();
+    setNetworkStatus('已取消匹配', 'normal');
+});
 
 function copyRoomCode() {
     if (!roomId) {
@@ -512,12 +733,176 @@ function updatePlayerCardsVisibility() {
 }
 
 playerCountSelect.addEventListener('change', (e) => {
+    if (gameMode === '2v2') return;
     targetPlayerCount = parseInt(e.target.value);
     if (networkMode === NetworkMode.LOCAL && targetPlayerCount > 2) {
         setNetworkStatus('注意：本地模式只支持双人，请点击"创建房间"进行多人联机', 'normal');
     }
     updatePlayerCardsVisibility();
 });
+
+gameModeSelect.addEventListener('change', (e) => {
+    gameMode = e.target.value;
+    if (gameMode === '2v2') {
+        playerCountSelect.value = '4';
+        playerCountSelect.disabled = true;
+        targetPlayerCount = 4;
+        if (networkMode === NetworkMode.LOCAL) {
+            setNetworkStatus('注意：2v2 组队模式需要创建房间进行联机', 'normal');
+        }
+    } else {
+        playerCountSelect.disabled = false;
+        targetPlayerCount = parseInt(playerCountSelect.value) || 2;
+    }
+    updatePlayerCardsVisibility();
+});
+
+// Auth UI Logic
+const loginBtn = document.getElementById('login-btn');
+const logoutBtn = document.getElementById('logout-btn');
+const statsBtn = document.getElementById('stats-btn');
+const authModal = document.getElementById('auth-modal');
+const statsModal = document.getElementById('stats-modal');
+const closeAuthBtn = document.getElementById('close-auth');
+const closeStatsBtn = document.getElementById('close-stats');
+const doLoginBtn = document.getElementById('do-login-btn');
+const doRegisterBtn = document.getElementById('do-register-btn');
+const authUsername = document.getElementById('auth-username');
+const authPassword = document.getElementById('auth-password');
+const authError = document.getElementById('auth-error');
+const currentUserDisplay = document.getElementById('current-user-display');
+
+function updateAuthUI() {
+    if (currentUser) {
+        currentUserDisplay.textContent = `玩家：${currentUser}`;
+        currentUserDisplay.classList.remove('hidden');
+        loginBtn.classList.add('hidden');
+        logoutBtn.classList.remove('hidden');
+        statsBtn.classList.remove('hidden');
+    } else {
+        currentUserDisplay.classList.add('hidden');
+        loginBtn.classList.remove('hidden');
+        logoutBtn.classList.add('hidden');
+        statsBtn.classList.add('hidden');
+    }
+}
+
+loginBtn.addEventListener('click', () => {
+    authModal.classList.remove('hidden');
+    authError.textContent = '';
+});
+
+closeAuthBtn.addEventListener('click', () => authModal.classList.add('hidden'));
+
+doRegisterBtn.addEventListener('click', () => {
+    const user = authUsername.value.trim();
+    const pass = authPassword.value.trim();
+    if (!user || !pass) { authError.textContent = '用户名和密码不能为空'; return; }
+    
+    const accs = getAccounts();
+    if (accs[user]) { authError.textContent = '该用户名已被注册'; return; }
+    
+    accs[user] = {
+        password: pass,
+        stats: { wins: 0, losses: 0, draws: 0, kills: 0, damage: 0, elo: 1000 }
+    };
+    saveAccounts(accs);
+    authError.style.color = '#2ecc71';
+    authError.textContent = '注册成功！请点击登录。';
+});
+
+doLoginBtn.addEventListener('click', () => {
+    const user = authUsername.value.trim();
+    const pass = authPassword.value.trim();
+    if (!user || !pass) { authError.textContent = '用户名和密码不能为空'; return; }
+    
+    const accs = getAccounts();
+    if (!accs[user] || accs[user].password !== pass) {
+        authError.style.color = '#e74c3c';
+        authError.textContent = '用户名或密码错误';
+        return;
+    }
+    
+    currentUser = user;
+    localStorage.setItem('currentUser', user);
+    authModal.classList.add('hidden');
+    authUsername.value = '';
+    authPassword.value = '';
+    updateAuthUI();
+});
+
+logoutBtn.addEventListener('click', () => {
+    currentUser = null;
+    localStorage.removeItem('currentUser');
+    updateAuthUI();
+});
+
+function getRankName(elo) {
+    if (elo < 1100) return { name: '青铜', color: '#cd7f32' };
+    if (elo < 1300) return { name: '白银', color: '#bdc3c7' };
+    if (elo < 1500) return { name: '黄金', color: '#f1c40f' };
+    if (elo < 1800) return { name: '铂金', color: '#00cec9' };
+    return { name: '钻石', color: '#9b59b6' };
+}
+
+statsBtn.addEventListener('click', () => {
+    if (!currentUser) return;
+    const accs = getAccounts();
+    const stats = accs[currentUser]?.stats || { wins: 0, losses: 0, draws: 0, kills: 0, damage: 0, elo: 1000 };
+    
+    const rank = getRankName(stats.elo || 1000);
+    const rankEl = document.getElementById('stat-rank');
+    rankEl.textContent = `${rank.name} (${Math.round(stats.elo || 1000)})`;
+    rankEl.style.color = rank.color;
+
+    document.getElementById('stat-wins').textContent = stats.wins;
+    document.getElementById('stat-losses').textContent = stats.losses;
+    document.getElementById('stat-draws').textContent = stats.draws;
+    document.getElementById('stat-kills').textContent = stats.kills;
+    document.getElementById('stat-damage').textContent = Math.round(stats.damage);
+    const totalGames = stats.wins + stats.losses + stats.draws;
+    const winRate = totalGames > 0 ? Math.round((stats.wins / totalGames) * 100) : 0;
+    document.getElementById('stat-winrate').textContent = `${winRate}%`;
+    statsModal.classList.remove('hidden');
+});
+
+closeStatsBtn.addEventListener('click', () => statsModal.classList.add('hidden'));
+
+// Chat UI Logic
+const lobbyChat = document.getElementById('lobby-chat');
+const chatMessages = document.getElementById('chat-messages');
+const chatInput = document.getElementById('chat-input');
+const sendChatBtn = document.getElementById('send-chat-btn');
+
+function appendChatMessage(author, text, isSys = false) {
+    const msgEl = document.createElement('p');
+    msgEl.className = 'chat-msg';
+    if (isSys) {
+        msgEl.innerHTML = `<span class="sys">${text}</span>`;
+    } else {
+        msgEl.innerHTML = `<span class="author">[${author}]:</span> ${text}`;
+    }
+    chatMessages.appendChild(msgEl);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function sendChat() {
+    if (networkMode !== NetworkMode.ONLINE) return;
+    const text = chatInput.value.trim();
+    if (!text) return;
+    const author = currentUser || (networkRole === NetworkRole.HOST ? '主机' : `玩家 ${myPlayerId}`);
+    
+    if (networkRole === NetworkRole.HOST) {
+        appendChatMessage(author, text);
+        broadcast({ type: 'chat', author, text });
+    } else {
+        connections['HOST'].send({ type: 'chat', author, text });
+    }
+    chatInput.value = '';
+}
+
+sendChatBtn.addEventListener('click', sendChat);
+chatInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendChat(); });
 
 localBtn.addEventListener('click', switchToLocalMode);
 hostBtn.addEventListener('click', createRoom);
@@ -560,16 +945,19 @@ function scheduleStartIfReady() {
 function handleSelectionInput(key) {
     if (currentState !== GameState.SELECTION) return;
 
-    const classMap = { '1': '火系', '2': '水系', '3': '土系', '4': '风系', '5': '电系', '6': '电系', '7': '风系', '8': '火系', '9': '水系', '0': '土系' };
+    const classMap = { 
+        '1': '火系', '2': '水系', '3': '土系', '4': '风系', '5': '电系', 'r': '光系', 't': '暗系',
+        '6': '电系', '7': '风系', '8': '火系', '9': '水系', '0': '土系', 'o': '光系', 'p': '暗系' 
+    };
     const allKeysMap = { ...classMap };
 
     if (networkMode === NetworkMode.LOCAL) {
-        if (['1', '2', '3', '4', '5'].includes(key)) {
+        if (['1', '2', '3', '4', '5', 'r', 't'].includes(key)) {
             playerClasses.A = classMap[key];
             document.getElementById('p1-status').innerText = `当前选择：${playerClasses.A}`;
             soundManager.select();
         }
-        if (['6', '7', '8', '9', '0'].includes(key)) {
+        if (['6', '7', '8', '9', '0', 'o', 'p'].includes(key)) {
             playerClasses.B = classMap[key];
             document.getElementById('p2-status').innerText = `当前选择：${playerClasses.B}`;
             soundManager.select();
@@ -578,7 +966,7 @@ function handleSelectionInput(key) {
         return;
     }
 
-    if (networkRole === NetworkRole.HOST && ['1', '2', '3', '4', '5'].includes(key)) {
+    if (networkRole === NetworkRole.HOST && ['1', '2', '3', '4', '5', 'r', 't'].includes(key)) {
         playerClasses.A = classMap[key];
         document.getElementById('p1-status').innerText = `当前选择：${playerClasses.A}`;
         broadcast({ type: 'host-selection', classes: playerClasses });
@@ -604,9 +992,26 @@ function isGuestBattleKey(key) {
 function handleNetworkMessage(message, guestId) {
     if (!message || typeof message !== 'object') return;
 
+    if (message.type === 'chat') {
+        appendChatMessage(message.author, message.text);
+        if (networkRole === NetworkRole.HOST) {
+            broadcast(message);
+        }
+        return;
+    }
+
     if (message.type === 'host-welcome' && networkRole === NetworkRole.GUEST) {
         myPlayerId = message.guestId;
         targetPlayerCount = message.targetPlayerCount;
+        gameMode = message.gameMode || 'ffa';
+        if (gameMode === '2v2') {
+            gameModeSelect.value = '2v2';
+            playerCountSelect.value = '4';
+            playerCountSelect.disabled = true;
+        } else {
+            gameModeSelect.value = 'ffa';
+            playerCountSelect.value = targetPlayerCount.toString();
+        }
         updatePlayerCardsVisibility();
         setNetworkStatus(`已连接主机，你的身份是 玩家 ${myPlayerId}`, 'success');
         updateStartTip();
@@ -699,11 +1104,17 @@ function getInputState(playerId) {
     return playerId === 'A' ? keys : new Proxy(remoteKeys, { get: (t, prop) => t[`${playerId}_${prop}`] || false });
 }
 
+function isEnemy(p1, p2) {
+    if (p1 === p2) return false;
+    if (gameMode === '2v2' && p1.team !== 0 && p1.team === p2.team) return false;
+    return true;
+}
+
 function getClosestEnemy(player) {
     let closest = null;
     let minDist = Infinity;
     for (let p of playersList) {
-        if (p === player || p.hp <= 0) continue;
+        if (!isEnemy(p, player) || (p.hp <= 0 && !p.isDowned)) continue;
         const d = Math.hypot(p.x - player.x, p.y - player.y);
         if (d < minDist) {
             minDist = d;
@@ -718,6 +1129,7 @@ class Player {
         this.config = config;
         this.className = className;
         this.classData = SkillData[className];
+        this.team = gameMode === '2v2' ? ((config.id === 'A' || config.id === 'C') ? 1 : 2) : 0;
         this.x = config.startX;
         this.y = config.startY;
         this.hp = 100;
@@ -730,6 +1142,10 @@ class Player {
         this.cooldowns = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
         this.statuses = [];
         this.shieldAmount = 0;
+        this.isDowned = false;
+        this.downedHp = 0;
+        this.maxDownedHp = 100;
+        this.revivingTimer = 0;
     }
 
     get speed() {
@@ -759,7 +1175,7 @@ class Player {
         }
     }
 
-    takeDamage(amount, sourceClass = null) {
+    takeDamage(amount, sourceClass = null, attacker = null) {
         soundManager.hit();
         if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
             networkEvents.push({ type: 'sound', sound: 'hit' });
@@ -787,16 +1203,127 @@ class Player {
             }
         }
 
+        if (finalDamage > 0) {
+            if (attacker && attacker.config.id === myPlayerId) {
+                currentSessionStats.damage += finalDamage;
+            }
+
+            const dmgText = `-${Math.round(finalDamage)}`;
+            const dmgSize = finalDamage >= 30 ? 28 : 20;
+            floatingTexts.push(new FloatingText(this.x, this.y, dmgText, '#e74c3c', dmgSize));
+            if (finalDamage >= 30) screenShake = Math.max(screenShake, finalDamage >= 50 ? 15 : 8);
+            
+            if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                networkEvents.push({ type: 'floatingText', x: this.x, y: this.y, text: dmgText, color: '#e74c3c', size: dmgSize });
+                if (finalDamage >= 30) {
+                    networkEvents.push({ type: 'shake', amount: finalDamage >= 50 ? 15 : 8 });
+                }
+            }
+        }
+
+        if (this.isDowned) {
+            this.downedHp -= finalDamage;
+            if (this.downedHp <= 0) {
+                this.isDowned = false;
+                this.hp = 0;
+                if (attacker) {
+                    if (attacker.config.id === myPlayerId) currentSessionStats.kills++;
+                    triggerKillFeed(attacker.config.id, this.config.id);
+                    if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                        networkEvents.push({ type: 'kill', killer: attacker.config.id, victim: this.config.id });
+                    }
+                }
+            }
+            this.updateUI();
+            return;
+        }
+
+        const wasAlive = this.hp > 0;
         this.hp = Math.max(0, this.hp - finalDamage);
+
+        if (wasAlive && this.hp === 0) {
+            if (gameMode === '2v2') {
+                this.isDowned = true;
+                this.downedHp = this.maxDownedHp;
+                this.statuses = []; // clear statuses
+                floatingTexts.push(new FloatingText(this.x, this.y, '倒地!', '#e67e22', 25));
+                if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                    networkEvents.push({ type: 'floatingText', x: this.x, y: this.y, text: '倒地!', color: '#e67e22', size: 25 });
+                }
+            } else {
+                if (attacker) {
+                    if (attacker.config.id === myPlayerId) currentSessionStats.kills++;
+                    triggerKillFeed(attacker.config.id, this.config.id);
+                    if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                        networkEvents.push({ type: 'kill', killer: attacker.config.id, victim: this.config.id });
+                    }
+                }
+            }
+        }
+
         this.updateUI();
     }
 
     update(dt) {
+        if (this.isDowned) {
+            this.downedHp -= dt * 5; // bleed out
+            if (this.downedHp <= 0) {
+                this.hp = 0;
+                this.isDowned = false; // completely dead
+                triggerKillFeed('流血', this.config.id);
+                if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                    networkEvents.push({ type: 'kill', killer: '流血', victim: this.config.id });
+                }
+            }
+
+            // Check revive
+            let beingRevived = false;
+            for (const teammate of playersList) {
+                if (teammate === this || teammate.hp <= 0 || teammate.isDowned || teammate.team !== this.team) continue;
+                const dist = Math.hypot(this.x - teammate.x, this.y - teammate.y);
+                if (dist < 80) {
+                    beingRevived = true;
+                    break;
+                }
+            }
+
+            if (beingRevived) {
+                this.revivingTimer += dt;
+                if (this.revivingTimer >= 3.0) {
+                    this.isDowned = false;
+                    this.hp = this.maxHp * 0.3; // revive with 30% HP
+                    this.revivingTimer = 0;
+                    floatingTexts.push(new FloatingText(this.x, this.y, '已救援', '#2ecc71', 25));
+                    if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                        networkEvents.push({ type: 'floatingText', x: this.x, y: this.y, text: '已救援', color: '#2ecc71', size: 25 });
+                    }
+                }
+            } else {
+                this.revivingTimer = Math.max(0, this.revivingTimer - dt);
+            }
+
+            const input = getInputState(this.config.id);
+            let dx = 0; let dy = 0;
+            if (input.up) dy -= 1;
+            if (input.down) dy += 1;
+            if (input.left) dx -= 1;
+            if (input.right) dx += 1;
+            if (dx !== 0 || dy !== 0) {
+                const len = Math.hypot(dx, dy);
+                this.x += (dx / len) * 50 * dt; // Crawl speed
+                this.y += (dy / len) * 50 * dt;
+                this.x = Math.max(this.radius, Math.min(canvas.width - this.radius, this.x));
+                this.y = Math.max(this.radius, Math.min(canvas.height - this.radius, this.y));
+            }
+            this.updateUI();
+            return; // skip normal update
+        }
+
         const enemy = getClosestEnemy(this);
         const shieldIndex = this.statuses.findIndex(s => s.type === 'shield');
         if (shieldIndex !== -1 && this.shieldAmount <= 0) {
             const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
-            if (dist < 100) enemy.takeDamage(15, this.className);
+            if (dist < 100) enemy.takeDamage(15, this.className, this);
             createExplosion(this.x, this.y, '#f1c40f', 20, 150, 0.6, 6);
             createExplosion(this.x, this.y, '#7f8c8d', 15, 120, 0.5, 4);
             entities.push(new AoE(this, this.x, this.y, 100, 0.1, '#f1c40f', 'shieldbreak', () => {}));
@@ -834,7 +1361,7 @@ class Player {
                 if (s.tickTimer >= 1.0) {
                     const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
                     if (dist < 150) {
-                        enemy.takeDamage(3, '电系');
+                        enemy.takeDamage(3, '电系', this);
                         enemy.addStatus('slow', 0.2);
                         enemy.applyShock('电系');
                         particles.push(new Particle(this.x, this.y, (enemy.x - this.x)*5, (enemy.y - this.y)*5, 0.2, '#f1c40f', 3));
@@ -844,9 +1371,12 @@ class Player {
             }
 
             if (s.duration <= 0) {
+                if (s.type === 'deathdescent') {
+                    this.hp = Math.max(1, this.hp - 10); // Penalty when ending
+                }
                 if (s.type === 'shield') {
                     const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
-                    if (dist < 100) enemy.takeDamage(15, this.className);
+                    if (dist < 100) enemy.takeDamage(15, this.className, this);
                     createExplosion(this.x, this.y, '#f1c40f', 20, 150, 0.6, 6);
                     createExplosion(this.x, this.y, '#7f8c8d', 15, 120, 0.5, 4);
                     entities.push(new AoE(this, this.x, this.y, 100, 0.1, '#f1c40f', 'shieldbreak', () => {}));
@@ -860,11 +1390,23 @@ class Player {
             const input = getInputState(this.config.id);
             let dx = 0;
             let dy = 0;
-            if (input[this.config.keys.up]) dy -= 1;
-            if (input[this.config.keys.down]) dy += 1;
-            if (input[this.config.keys.left]) dx -= 1;
-            if (input[this.config.keys.right]) dx += 1;
-            if (dx !== 0 && dy !== 0) {
+            
+            if (this.hasStatus('fear')) {
+                // Move randomly if feared
+                if (Math.random() < 0.1) {
+                    this.fearDx = (Math.random() - 0.5) * 2;
+                    this.fearDy = (Math.random() - 0.5) * 2;
+                }
+                dx = this.fearDx || (Math.random() - 0.5);
+                dy = this.fearDy || (Math.random() - 0.5);
+            } else {
+                if (input[this.config.keys.up]) dy -= 1;
+                if (input[this.config.keys.down]) dy += 1;
+                if (input[this.config.keys.left]) dx -= 1;
+                if (input[this.config.keys.right]) dx += 1;
+            }
+            
+            if (dx !== 0 || dy !== 0) {
                 const len = Math.hypot(dx, dy);
                 dx /= len;
                 dy /= len;
@@ -929,13 +1471,13 @@ class Player {
         switch (skill.id) {
             case 'fireball':
                 entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 500, 15, '#e74c3c', 'fireball', target => {
-                    target.takeDamage(20, this.className);
+                    target.takeDamage(20, this.className, this);
                     target.addStatus('burn', 3);
                 }));
                 break;
             case 'fireblast':
                 entities.push(new AoE(this, this.x, this.y, 100, 0.5, '#e67e22', 'fireblast', target => {
-                    target.takeDamage(40, this.className);
+                    target.takeDamage(40, this.className, this);
                     const kx = target.x - this.x;
                     const ky = target.y - this.y;
                     const kLen = Math.hypot(kx, ky);
@@ -952,7 +1494,7 @@ class Player {
                     const px = this.x + dirX * (dashDist / dashSteps) * i;
                     const py = this.y + dirY * (dashDist / dashSteps) * i;
                     entities.push(new AoE(this, px, py, 30, 0.2, '#e74c3c', 'flamedash', target => {
-                        target.takeDamage(15, this.className);
+                        target.takeDamage(15, this.className, this);
                         target.addStatus('burn', 2);
                     }));
                 }
@@ -969,19 +1511,19 @@ class Player {
             }
             case 'meteor':
                 entities.push(new AoE(this, enemy.x, enemy.y, 120, 1.5, '#c0392b', 'meteor', target => {
-                    target.takeDamage(60, this.className);
+                    target.takeDamage(60, this.className, this);
                     target.addStatus('burn', 5);
                 }));
                 break;
             case 'frostray':
                 entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 800, 10, '#00a8ff', 'frostray', target => {
-                    target.takeDamage(15, this.className);
+                    target.takeDamage(15, this.className, this);
                     target.addStatus('slow', 2);
                 }));
                 break;
             case 'waterprison':
                 entities.push(new AoE(this, enemy.x, enemy.y, 40, 0.5, '#3498db', 'waterprison', target => {
-                    target.takeDamage(10, this.className);
+                    target.takeDamage(10, this.className, this);
                     target.addStatus('root', 1.5);
                 }));
                 break;
@@ -989,7 +1531,7 @@ class Player {
                 for (let i = 0; i < 3; i++) {
                     setTimeout(() => {
                         entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 600, 12, '#2980b9', 'waterjet', target => {
-                            target.takeDamage(10, this.className);
+                            target.takeDamage(10, this.className, this);
                             target.x += dirX * 10;
                             target.y += dirY * 10;
                         }));
@@ -1004,7 +1546,7 @@ class Player {
                 break;
             case 'blizzard':
                 entities.push(new AoE(this, enemy.x, enemy.y, 150, 2.0, '#bdc3c7', 'blizzard', target => {
-                    target.takeDamage(45, this.className);
+                    target.takeDamage(45, this.className, this);
                     target.addStatus('slow', 4);
                 }));
                 break;
@@ -1012,7 +1554,7 @@ class Player {
                 for (let i = -1; i <= 1; i++) {
                     const angle = Math.atan2(dirY, dirX) + i * 0.2;
                     entities.push(new Projectile(this, this.x, this.y, Math.cos(angle), Math.sin(angle), 400, 8, '#7f8c8d', 'stone', target => {
-                        target.takeDamage(10, this.className);
+                        target.takeDamage(10, this.className, this);
                         target.addStatus('slow', 0.2);
                     }));
                 }
@@ -1029,7 +1571,7 @@ class Player {
                         const px = this.x + dirX * 60 * i;
                         const py = this.y + dirY * 60 * i;
                         entities.push(new AoE(this, px, py, 25, 0.3, '#f39c12', 'earthspike', target => {
-                            target.takeDamage(15, this.className);
+                            target.takeDamage(15, this.className, this);
                             target.addStatus('knockup', 0.5);
                         }));
                     }, i * 150);
@@ -1037,25 +1579,25 @@ class Player {
                 break;
             case 'mudswamp':
                 entities.push(new AoE(this, enemy.x, enemy.y, 80, 0.5, '#7f8c8d', 'mudswamp', target => {
-                    target.takeDamage(10, this.className);
+                    target.takeDamage(10, this.className, this);
                     target.addStatus('slow', 5);
                     target.mp = Math.max(0, target.mp - 20);
                 }));
                 break;
             case 'earthquake':
                 entities.push(new AoE(this, this.x, this.y, 250, 1.5, '#8e44ad', 'earthquake', target => {
-                    target.takeDamage(45, this.className);
+                    target.takeDamage(45, this.className, this);
                     target.addStatus('root', 2);
                 }));
                 break;
             case 'windblade':
                 entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 1200, 10, '#1abc9c', 'windblade', target => {
-                    target.takeDamage(8, this.className);
+                    target.takeDamage(8, this.className, this);
                 }));
                 break;
             case 'whirlwind':
                 entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 150, 40, '#16a085', 'whirlwind', target => {
-                    target.takeDamage(25, this.className);
+                    target.takeDamage(25, this.className, this);
                     target.x += dirX * 30;
                     target.y += dirY * 30;
                 }, true));
@@ -1068,7 +1610,7 @@ class Player {
             }
             case 'hurricane':
                 entities.push(new AoE(this, enemy.x, enemy.y, 90, 0.6, '#1abc9c', 'hurricane', target => {
-                    target.takeDamage(45, this.className);
+                    target.takeDamage(45, this.className, this);
                     target.addStatus('knockup', 1.5);
                 }));
                 break;
@@ -1078,14 +1620,14 @@ class Player {
                 break;
             case 'spark':
                 entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 1500, 6, '#f1c40f', 'spark', target => {
-                    target.takeDamage(5, this.className);
+                    target.takeDamage(5, this.className, this);
                     target.applyShock(this.className);
                 }));
                 break;
             case 'balllightning':
                 // Slow moving projectile that constantly zaps nearby enemies
                 entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 150, 25, '#f1c40f', 'balllightning', target => {
-                    target.takeDamage(10, this.className); // Slightly nerfed direct hit damage
+                    target.takeDamage(10, this.className, this); // Slightly nerfed direct hit damage
                     target.addStatus('paralyze', 0.2); // Restore a bit of paralyze
                     target.applyShock(this.className);
                 }));
@@ -1097,7 +1639,7 @@ class Player {
             case 'thunderstrike':
                 // Small AoE at mouse/enemy location with delay
                 entities.push(new AoE(this, enemy.x, enemy.y, 40, 0.3, '#9b59b6', 'thunderstrike', target => {
-                    target.takeDamage(35, this.className);
+                    target.takeDamage(35, this.className, this);
                     target.addStatus('paralyze', 0.5);
                     target.applyShock(this.className);
                 }));
@@ -1113,13 +1655,91 @@ class Player {
                 
                 // We use AoE class but with a special 'railgun' type to handle line intersection
                 entities.push(new AoE(this, targetX, targetY, 1, 1.0, '#f1c40f', 'railgun', target => {
-                    target.takeDamage(60, this.className);
+                    target.takeDamage(60, this.className, this);
                     target.addStatus('paralyze', 0.5);
                     target.applyShock(this.className);
                     createExplosion(target.x, target.y, '#f1c40f', 30, 150, 0.6, 5);
                 }));
                 break;
             }
+            case 'lightbolt':
+                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 800, 12, '#f39c12', 'lightbolt', target => {
+                    if (isEnemy(target, this)) {
+                        target.takeDamage(12, this.className, this);
+                    } else if (target !== this && target.hp > 0 && !target.isDowned) {
+                        target.hp = Math.min(target.maxHp, target.hp + 8);
+                        target.updateUI();
+                        floatingTexts.push(new FloatingText(target.x, target.y, '+8', '#2ecc71', 20));
+                        if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                            networkEvents.push({ type: 'floatingText', x: target.x, y: target.y, text: '+8', color: '#2ecc71', size: 20 });
+                        }
+                    }
+                }));
+                break;
+            case 'healingaura':
+                entities.push(new AoE(this, this.x, this.y, 120, 3.0, '#f39c12', 'healingaura', target => {
+                    if (!isEnemy(target, this) && target.hp > 0 && !target.isDowned) {
+                        target.hp = Math.min(target.maxHp, target.hp + 20);
+                        target.updateUI();
+                        floatingTexts.push(new FloatingText(target.x, target.y, '+20', '#2ecc71', 20));
+                        if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                            networkEvents.push({ type: 'floatingText', x: target.x, y: target.y, text: '+20', color: '#2ecc71', size: 20 });
+                        }
+                    }
+                }));
+                break;
+            case 'holyshield':
+                this.shieldAmount += 50;
+                createExplosion(this.x, this.y, '#f39c12', 20, 100, 0.5, 3);
+                break;
+            case 'blindingflash':
+                entities.push(new AoE(this, this.x, this.y, 200, 0.5, '#f39c12', 'blindingflash', target => {
+                    if (isEnemy(target, this)) {
+                        target.takeDamage(15, this.className, this);
+                        target.addStatus('blind', 2); // reuse or create blind status logic
+                    }
+                }));
+                break;
+            case 'judgment':
+                entities.push(new AoE(this, enemy.x, enemy.y, 60, 0.8, '#f39c12', 'judgment', target => {
+                    target.takeDamage(55, this.className, this);
+                }));
+                break;
+            case 'shadowball':
+                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 300, 20, '#8e44ad', 'shadowball', target => {
+                    target.takeDamage(20, this.className, this);
+                    this.hp = Math.min(this.maxHp, this.hp + 10);
+                    this.updateUI();
+                    floatingTexts.push(new FloatingText(this.x, this.y, '+10', '#2ecc71', 20));
+                    if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                        networkEvents.push({ type: 'floatingText', x: this.x, y: this.y, text: '+10', color: '#2ecc71', size: 20 });
+                    }
+                }));
+                break;
+            case 'vampirictouch':
+                entities.push(new Projectile(this, this.x, this.y, dirX, dirY, 900, 15, '#8e44ad', 'vampirictouch', target => {
+                    target.takeDamage(35, this.className, this);
+                    target.addStatus('slow', 3);
+                    this.hp = Math.min(this.maxHp, this.hp + 20);
+                    this.updateUI();
+                }));
+                break;
+            case 'fearscream':
+                entities.push(new AoE(this, this.x, this.y, 150, 0.5, '#8e44ad', 'fearscream', target => {
+                    target.takeDamage(20, this.className, this);
+                    target.addStatus('fear', 2);
+                }));
+                break;
+            case 'abyssswamp':
+                entities.push(new AoE(this, enemy.x, enemy.y, 100, 1.0, '#8e44ad', 'abyssswamp', target => {
+                    target.takeDamage(30, this.className, this);
+                    target.addStatus('slow', 4);
+                }));
+                break;
+            case 'deathdescent':
+                this.addStatus('deathdescent', 8);
+                createExplosion(this.x, this.y, '#8e44ad', 30, 150, 1.0, 4);
+                break;
         }
     }
 
@@ -1148,7 +1768,14 @@ class Player {
         const mpBar = document.getElementById(`p${num}-mp`);
         if(!hpBar || !mpBar) return;
         
-        const hpPct = `${(this.hp / this.maxHp) * 100}%`;
+        let hpPct = `${(this.hp / this.maxHp) * 100}%`;
+        if (this.isDowned) {
+            hpPct = `${(this.downedHp / this.maxDownedHp) * 100}%`;
+            hpBar.style.backgroundColor = '#e67e22'; // Orange/bleed color
+        } else {
+            hpBar.style.backgroundColor = '#e74c3c'; // Normal red
+        }
+        
         const mpPct = `${(this.mp / this.maxMp) * 100}%`;
         
         if (hpBar.style.width !== hpPct) hpBar.style.width = hpPct;
@@ -1256,7 +1883,7 @@ class Projectile {
         this.y += this.dirY * this.speed * dt;
 
         for (const entity of entities) {
-            if (entity instanceof Wall && entity.owner !== this.owner) {
+            if (entity instanceof Wall && isEnemy(entity.owner, this.owner)) {
                 const dist = Math.hypot(this.x - entity.x, this.y - entity.y);
                 if (dist < entity.length / 2 + this.radius) {
                     this.active = false;
@@ -1285,8 +1912,8 @@ class Projectile {
         if (this.type === 'balllightning') {
             const enemy = getClosestEnemy(this.owner);
             const distToEnemy = Math.hypot(this.x - enemy.x, this.y - enemy.y);
-            if (enemy !== this.owner && distToEnemy < 100 && Math.random() < dt * 1.5) { // ~1.5 zaps per second (balanced frequency)
-                enemy.takeDamage(2, '电系'); // Slightly reduced zap damage
+            if (isEnemy(enemy, this.owner) && distToEnemy < 100 && Math.random() < dt * 1.5) { // ~1.5 zaps per second (balanced frequency)
+                enemy.takeDamage(2, '电系', this.owner); // Slightly reduced zap damage
                 enemy.addStatus('paralyze', 0.1); // Restore some paralyze
                 enemy.applyShock('电系');
                 // visual arc
@@ -1306,7 +1933,7 @@ class Projectile {
         }
 
         for (const enemy of playersList) {
-            if (enemy === this.owner || enemy.hp <= 0) continue;
+            if (!isEnemy(enemy, this.owner) || (enemy.hp <= 0 && !enemy.isDowned)) continue;
             const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
             if (dist < this.radius + enemy.radius && !this.hitTargets.has(enemy.config.id)) {
             this.onHit(enemy);
@@ -1379,7 +2006,7 @@ class Wall {
 
         if (this.damaging) {
             for (const enemy of playersList) {
-            if (enemy === this.owner || enemy.hp <= 0) continue;
+            if (!isEnemy(enemy, this.owner) || (enemy.hp <= 0 && !enemy.isDowned)) continue;
             const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
             if (dist < this.length / 2 + enemy.radius) {
                 this.damageTickTimer += dt;
@@ -1387,7 +2014,7 @@ class Wall {
 
                 // 火墙改为固定频率结算，避免按帧伤害过高。
                 if (this.damageTickTimer >= 0.25) {
-                    enemy.takeDamage(4, this.owner.className);
+                    enemy.takeDamage(4, this.owner.className, this.owner);
                     this.damageTickTimer = 0;
                 }
 
@@ -1484,7 +2111,7 @@ class AoE {
                 const rDist = Math.hypot(rx, ry);
                 if (rDist > 0) { rx /= rDist; ry /= rDist; } else { rx = 1; ry = 0; }
                 for (const e of playersList) {
-                    if (e === this.owner || e.hp <= 0) continue;
+                    if (!isEnemy(e, this.owner) || (e.hp <= 0 && !e.isDowned)) continue;
                     const crossProduct = Math.abs(rx * (e.y - this.owner.y) - ry * (e.x - this.owner.x));
                     const isHitting = crossProduct <= e.radius + 15;
                     const dotProduct = (e.x - this.owner.x) * rx + (e.y - this.owner.y) * ry;
@@ -1494,7 +2121,7 @@ class AoE {
                 }
             } else {
                 for (const e of playersList) {
-                    if (e === this.owner || e.hp <= 0) continue;
+                    if (!isEnemy(e, this.owner) || (e.hp <= 0 && !e.isDowned)) continue;
                     const dist = Math.hypot(this.x - e.x, this.y - e.y);
                     if (dist < this.radius + e.radius) {
                         this.onHit(e);
@@ -1606,6 +2233,17 @@ function drawPlayerShape(ctx, player) {
         ctx.restore();
     }
 
+    const hasDeathDescent = player.hasStatus ? player.hasStatus('deathdescent') : player.statuses.some(s => s.type === 'deathdescent');
+    if (hasDeathDescent) {
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.beginPath();
+        ctx.arc(0, 0, player.radius + 10, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(142, 68, 173, 0.4)';
+        ctx.fill();
+        ctx.restore();
+    }
+
     let drawY = player.y;
     const knockupStatus = player.statuses.find(s => s.type === 'knockup');
     if (knockupStatus) {
@@ -1627,12 +2265,30 @@ function drawPlayerShape(ctx, player) {
         else if (player.className === '土系') playerColor = '#8b4513'; // 棕色
         else if (player.className === '风系') playerColor = '#2ecc71'; // 绿色
         else if (player.className === '电系') playerColor = '#f1c40f'; // 黄色
+        else if (player.className === '光系') playerColor = '#f39c12'; // 亮金色
+        else if (player.className === '暗系') playerColor = '#8e44ad'; // 深紫色
     }
 
     ctx.fillStyle = playerColor;
     ctx.beginPath();
-    ctx.arc(player.x, drawY, player.radius, 0, Math.PI * 2);
+    if (player.isDowned) {
+        ctx.ellipse(player.x, drawY + player.radius / 2, player.radius, player.radius / 2, 0, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.5; // Draw slightly transparent
+    } else {
+        ctx.arc(player.x, drawY, player.radius, 0, Math.PI * 2);
+    }
     ctx.fill();
+    ctx.globalAlpha = 1.0;
+
+    const hasBlind = player.hasStatus ? player.hasStatus('blind') : player.statuses.some(s => s.type === 'blind');
+    if (hasBlind && player.config.id === myPlayerId) {
+        // Blind effect for local player
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform to cover whole canvas
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+    }
 
     if (hasBurn) {
         ctx.fillStyle = '#e74c3c';
@@ -1669,6 +2325,20 @@ function drawPlayerShape(ctx, player) {
     ctx.font = '14px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(player.className, player.x, drawY + 5);
+
+    if (gameMode === '2v2') {
+        const teamColor = player.team === 1 ? '#3498db' : '#e74c3c';
+        const teamText = player.team === 1 ? '蓝队' : '红队';
+        ctx.fillStyle = teamColor;
+        ctx.font = 'bold 12px Arial';
+        const stateText = player.isDowned ? `[${teamText} ${player.config.id} - 倒地]` : `[${teamText} ${player.config.id}]`;
+        ctx.fillText(stateText, player.x, drawY - player.radius - 20);
+    } else {
+        ctx.fillStyle = 'white';
+        ctx.font = '12px Arial';
+        const stateText = player.isDowned ? `[玩家 ${player.config.id} - 倒地]` : `[玩家 ${player.config.id}]`;
+        ctx.fillText(stateText, player.x, drawY - player.radius - 20);
+    }
 }
 
 function drawProjectileShape(ctx, projectile) {
@@ -1821,7 +2491,9 @@ function serializePlayer(player) {
         maxMp: player.maxMp,
         shieldAmount: player.shieldAmount,
         cooldowns: { ...player.cooldowns },
-        statuses: player.statuses.map(status => ({ ...status }))
+        statuses: player.statuses.map(status => ({ ...status })),
+        isDowned: player.isDowned,
+        downedHp: player.downedHp
     };
 }
 
@@ -1896,6 +2568,8 @@ function applyPlayerSnapshot(target, data) {
     target.shieldAmount = data.shieldAmount;
     target.cooldowns = { ...data.cooldowns };
     target.statuses = data.statuses.map(status => ({ ...status }));
+    target.isDowned = data.isDowned || false;
+    target.downedHp = data.downedHp || 0;
     target.updateSkillUI();
 }
 
@@ -1965,6 +2639,8 @@ function maybeSendSnapshot() {
 function startGame() {
     document.getElementById('selection-screen').classList.add('hidden');
     document.getElementById('end-screen').classList.add('hidden');
+    currentSessionStats = { kills: 0, damage: 0 };
+    
     document.getElementById('game-screen').classList.remove('hidden');
     currentState = GameState.SELECTION;
 
@@ -2086,19 +2762,35 @@ function gameLoop(time) {
 
 function update(dt) {
     playersList.forEach(p => {
-        if (p.hp > 0) p.update(dt);
+        if (p.hp > 0 || p.isDowned) p.update(dt);
     });
     entities.forEach(entity => entity.update(dt));
     entities = entities.filter(entity => entity.active);
     particles.forEach(particle => particle.update(dt));
     particles = particles.filter(particle => particle.life > 0);
 
-    const alivePlayers = playersList.filter(p => p.hp > 0);
-    if (alivePlayers.length <= 1 && playersList.length > 1) {
-        let winner = '平局';
-        if (alivePlayers.length === 1) {
-            winner = `玩家 ${alivePlayers[0].config.id}`;
+    let winner = null;
+    if (gameMode === '2v2') {
+        const team1Alive = playersList.some(p => p.team === 1 && (p.hp > 0 || p.isDowned));
+        const team2Alive = playersList.some(p => p.team === 2 && (p.hp > 0 || p.isDowned));
+        if (!team1Alive && !team2Alive) {
+            winner = '平局';
+        } else if (!team1Alive) {
+            winner = '红队'; // Team 2 wins
+        } else if (!team2Alive) {
+            winner = '蓝队'; // Team 1 wins
         }
+    } else {
+        const alivePlayers = playersList.filter(p => p.hp > 0 || p.isDowned);
+        if (alivePlayers.length <= 1 && playersList.length > 1) {
+            winner = '平局';
+            if (alivePlayers.length === 1) {
+                winner = `玩家 ${alivePlayers[0].config.id}`;
+            }
+        }
+    }
+
+    if (winner) {
         endGame(winner, true);
     }
 }
@@ -2114,7 +2806,7 @@ function draw() {
 
     if (playersList.length === 0) return;
     playersList.forEach(p => {
-        if (p.hp > 0) p.draw(ctx);
+        if (p.hp > 0 || p.isDowned) p.draw(ctx);
     });
     entities.forEach(entity => entity.draw(ctx));
     particles.forEach(particle => particle.draw(ctx));
@@ -2133,30 +2825,79 @@ function endGame(winner, notifyPeer) {
     endScreen.classList.remove('hidden');
 
     const winnerText = document.getElementById('winner-text');
+    let isWin = false;
+    let isDraw = false;
+    let isLoss = false;
+
     if (winner === '平局') {
         winnerText.innerText = '平局！';
         winnerText.style.color = '#ecf0f1';
+        isDraw = true;
     } else {
         winnerText.innerText = `${winner} 获胜！`;
         
         let winnerColor = '#ecf0f1';
-        const winnerId = winner.replace('玩家 ', '');
-        const winnerPlayer = playersList.find(p => p.config.id === winnerId);
-        if (winnerPlayer) {
-            winnerColor = winnerPlayer.config.color;
-            const classCounts = {};
-            playersList.forEach(p => { classCounts[p.className] = (classCounts[p.className] || 0) + 1; });
-            if (classCounts[winnerPlayer.className] === 1) {
-            if (winnerPlayer.className === '火系') winnerColor = '#e74c3c';
-            else if (winnerPlayer.className === '水系') winnerColor = '#3498db';
-            else if (winnerPlayer.className === '土系') winnerColor = '#8b4513';
-            else if (winnerPlayer.className === '风系') winnerColor = '#2ecc71';
-            else if (winnerPlayer.className === '电系') winnerColor = '#f1c40f';
+        if (winner === '蓝队') {
+            winnerColor = '#3498db';
+            winnerText.style.color = winnerColor;
+            if (myPlayerId === 'A' || myPlayerId === 'C') isWin = true;
+            else isLoss = true;
+        } else if (winner === '红队') {
+            winnerColor = '#e74c3c';
+            winnerText.style.color = winnerColor;
+            if (myPlayerId === 'B' || myPlayerId === 'D') isWin = true;
+            else isLoss = true;
+        } else {
+            const winnerId = winner.replace('玩家 ', '');
+            if (winnerId === myPlayerId) isWin = true;
+            else isLoss = true;
+
+            const winnerPlayer = playersList.find(p => p.config.id === winnerId);
+            if (winnerPlayer) {
+                winnerColor = winnerPlayer.config.color;
+                const classCounts = {};
+                playersList.forEach(p => { classCounts[p.className] = (classCounts[p.className] || 0) + 1; });
+                if (classCounts[winnerPlayer.className] === 1) {
+                    if (winnerPlayer.className === '火系') winnerColor = '#e74c3c';
+                    else if (winnerPlayer.className === '水系') winnerColor = '#3498db';
+                    else if (winnerPlayer.className === '土系') winnerColor = '#8b4513';
+                    else if (winnerPlayer.className === '风系') winnerColor = '#2ecc71';
+                    else if (winnerPlayer.className === '电系') winnerColor = '#f1c40f';
+                    else if (winnerPlayer.className === '光系') winnerColor = '#f39c12';
+                    else if (winnerPlayer.className === '暗系') winnerColor = '#8e44ad';
+                }
+                winnerText.style.color = winnerColor;
+            }
         }
-        
-        winnerText.style.color = winnerColor;
+    }
+
+    if (currentUser) {
+        const accs = getAccounts();
+        if (accs[currentUser]) {
+            let eloChange = 0;
+            let currentElo = accs[currentUser].stats.elo || 1000;
+            
+            // Simple Elo calc (K-factor = 32, assuming average opponent Elo = 1000 if not implemented full matchmaking elo yet)
+            const expectedScore = 1 / (1 + Math.pow(10, (1000 - currentElo) / 400));
+            const actualScore = isWin ? 1 : (isDraw ? 0.5 : 0);
+            eloChange = Math.round(32 * (actualScore - expectedScore));
+            
+            accs[currentUser].stats.elo = Math.max(0, currentElo + eloChange);
+            
+            if (isWin) accs[currentUser].stats.wins++;
+            if (isLoss) accs[currentUser].stats.losses++;
+            if (isDraw) accs[currentUser].stats.draws++;
+            accs[currentUser].stats.kills += currentSessionStats.kills;
+            accs[currentUser].stats.damage += currentSessionStats.damage;
+            saveAccounts(accs);
+            
+            const eloText = eloChange >= 0 ? `+${eloChange}` : `${eloChange}`;
+            const eloColor = eloChange >= 0 ? '#2ecc71' : '#e74c3c';
+            winnerText.innerHTML += `<br><span style="font-size: 0.6em; color: ${eloColor};">排位分 ${eloText} (当前: ${accs[currentUser].stats.elo})</span>`;
         }
     }
 }
 
+// Auth Init Call
+initAuth();
 switchToLocalMode();

@@ -7,17 +7,63 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <!-- Top Right Auth UI -->
+    <div id="auth-ui" class="auth-container">
+        <span id="current-user-display" class="hidden">未登录</span>
+        <button id="login-btn" class="mode-btn small-btn">登录 / 注册</button>
+        <button id="stats-btn" class="mode-btn small-btn hidden">战绩</button>
+        <button id="logout-btn" class="mode-btn small-btn hidden">登出</button>
+    </div>
+
+    <!-- Auth Modal -->
+    <div id="auth-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-btn" id="close-auth">&times;</span>
+            <h2>登录 / 注册</h2>
+            <input type="text" id="auth-username" placeholder="用户名">
+            <input type="password" id="auth-password" placeholder="密码">
+            <p id="auth-error" class="error-text"></p>
+            <div class="modal-actions">
+                <button id="do-login-btn" class="mode-btn primary">登录</button>
+                <button id="do-register-btn" class="mode-btn">注册</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Modal -->
+    <div id="stats-modal" class="modal hidden">
+        <div class="modal-content stats-content">
+            <span class="close-btn" id="close-stats">&times;</span>
+            <h2>我的战绩</h2>
+            <div id="stats-details">
+                <p>当前段位：<span id="stat-rank" style="font-size: 1.2em;">青铜 (1000)</span></p>
+                <p>胜场：<span id="stat-wins">0</span></p>
+                <p>负场：<span id="stat-losses">0</span></p>
+                <p>平局：<span id="stat-draws">0</span></p>
+                <p>总击杀：<span id="stat-kills">0</span></p>
+                <p>总伤害：<span id="stat-damage">0</span></p>
+                <p>胜率：<span id="stat-winrate">0%</span></p>
+            </div>
+        </div>
+    </div>
+
     <div id="selection-screen" class="screen">
         <h1>双人魔法对战</h1>
         <div class="network-panel">
             <h2>联机大厅</h2>
             <div class="network-actions">
+                <select id="game-mode-select" class="mode-btn">
+                    <option value="ffa">乱斗模式</option>
+                    <option value="2v2">2v2 组队</option>
+                </select>
                 <select id="player-count-select" class="mode-btn">
                     <option value="2">双人模式</option>
                     <option value="3">三人模式</option>
                     <option value="4">四人模式</option>
                 </select>
                 <button id="local-mode-btn" class="mode-btn">本地游戏</button>
+                <button id="quick-match-btn" class="mode-btn" style="background-color: #e67e22; color: white;">快速对战</button>
+                <button id="cancel-match-btn" class="mode-btn hidden" style="background-color: #e74c3c; color: white;">取消匹配</button>
                 <button id="host-room-btn" class="mode-btn primary">创建房间</button>
                 <button id="delete-room-btn" class="mode-btn hidden">删除房间</button>
                 <button id="copy-room-btn" class="mode-btn">复制房间码</button>
@@ -34,33 +80,42 @@
             <div class="player-card">
                 <h3>玩家 A</h3>
                 <p>移动：W A S D</p>
-                <p>法系：1(火系) 2(水系) 3(土系) 4(风系) 5(电系)</p>
+                <p>法系：1(火) 2(水) 3(土) 4(风) 5(电) R(光) T(暗)</p>
                 <p>技能：1 2 3 4 5</p>
                 <p id="p1-status">当前选择：等待中...</p>
             </div>
             <div class="player-card p2">
                 <h3>玩家 B</h3>
                 <p>移动：↑ ↓ ← →</p>
-                <p>法系：6(电系) 7(风系) 8(火系) 9(水系) 0(土系)</p>
+                <p>法系：6(电) 7(风) 8(火) 9(水) 0(土) O(光) P(暗)</p>
                 <p>技能：8 9 0 - =</p>
                 <p id="p2-status">当前选择：等待中...</p>
             </div>
             <div class="player-card p3 hidden" id="card-p3">
                 <h3>玩家 C</h3>
                 <p>移动：W A S D</p>
-                <p>法系：1(火系) 2(水系) 3(土系) 4(风系) 5(电系)</p>
+                <p>法系：1(火) 2(水) 3(土) 4(风) 5(电) R(光) T(暗)</p>
                 <p>技能：1 2 3 4 5</p>
                 <p id="p3-status">当前选择：等待中...</p>
             </div>
             <div class="player-card p4 hidden" id="card-p4">
                 <h3>玩家 D</h3>
                 <p>移动：↑ ↓ ← →</p>
-                <p>法系：6(电系) 7(风系) 8(火系) 9(水系) 0(土系)</p>
+                <p>法系：6(电) 7(风) 8(火) 9(水) 0(土) O(光) P(暗)</p>
                 <p>技能：8 9 0 - =</p>
                 <p id="p4-status">当前选择：等待中...</p>
             </div>
         </div>
         <h2 id="start-tip">本地模式：所有玩家选择法系后自动开始</h2>
+        
+        <!-- Lobby Chat -->
+        <div id="lobby-chat" class="lobby-chat hidden">
+            <div id="chat-messages" class="chat-messages"></div>
+            <div class="chat-input-row">
+                <input type="text" id="chat-input" placeholder="输入聊天内容...">
+                <button id="send-chat-btn" class="mode-btn small-btn">发送</button>
+            </div>
+        </div>
     </div>
     
     <!-- 2. 游戏对战界面 -->
@@ -99,6 +154,7 @@
     </div>
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <script src="main.js"></script>
 </body>
 </html>
