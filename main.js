@@ -313,7 +313,7 @@ const SkillData = {
             { id: 'vampirictouch', name: '吸血之触', cd: 10, cost: 30, keyName: '2/9', desc: '连接一个敌人，持续吸取其生命值并减速' },
             { id: 'fearscream', name: '恐惧尖啸', cd: 15, cost: 35, keyName: '3/0', desc: '发出尖啸，使周围敌人陷入恐惧状态，不受控制地乱跑' },
             { id: 'abyssswamp', name: '深渊泥潭', cd: 16, cost: 40, keyName: '4/-', desc: '在目标区域召唤深渊，持续造成伤害并大幅降低移速' },
-            { id: 'deathdescent', name: '死神降临', cd: 25, cost: 70, keyName: '5/=', desc: '进入死神形态，移速和伤害大幅提升，攻击附带吸血，持续8秒' }
+            { id: 'deathdescent', name: '死神降临', cd: 30, cost: 80, keyName: '5/=', desc: '化身死神(8秒)：移速提升、免伤50%、灼烧近身敌人。若敌人血量>90且高于自身，靠近会触发死神触手重击！结束时反噬扣血。' }
         ]
     }
 };
@@ -1377,6 +1377,33 @@ class Player {
                 }
             }
 
+            if (s.type === 'deathdescent') {
+                s.tickTimer += dt;
+                if (s.tickTimer >= 0.5) {
+                    // Deal low aura damage to nearby enemies every 0.5s
+                    const dist = Math.hypot(this.x - enemy.x, this.y - enemy.y);
+                    if (dist < 100) {
+                        enemy.takeDamage(5, '暗系', this);
+                        particles.push(new Particle(enemy.x, enemy.y, 0, -20, 0.4, '#8e44ad', 3));
+                        
+                        // Tentacle logic: enemy HP > 90 AND enemy HP > my HP
+                        if (enemy.hp > 90 && enemy.hp > this.hp) {
+                            if (!this.tentacleCooldown || this.tentacleCooldown <= 0) {
+                                // Trigger tentacle
+                                enemy.takeDamage(40, '暗系', this);
+                                createExplosion(enemy.x, enemy.y, '#8e44ad', 20, 200, 0.8, 6);
+                                floatingTexts.push(new FloatingText(enemy.x, enemy.y, '死神触手!', '#9b59b6', 25));
+                                if (networkMode === NetworkMode.ONLINE && networkRole === NetworkRole.HOST) {
+                                    networkEvents.push({ type: 'floatingText', x: enemy.x, y: enemy.y, text: '死神触手!', color: '#9b59b6', size: 25 });
+                                }
+                                this.tentacleCooldown = 3.0; // 3 second cooldown for tentacle
+                            }
+                        }
+                    }
+                    s.tickTimer -= 0.5;
+                }
+            }
+
             if (s.duration <= 0) {
                 if (s.type === 'deathdescent') {
                     this.hp = Math.max(1, this.hp - 10); // Penalty when ending
@@ -1427,6 +1454,7 @@ class Player {
         }
 
         this.mp = Math.min(this.maxMp, this.mp + this.mpRegen * dt);
+        if (this.tentacleCooldown > 0) this.tentacleCooldown -= dt;
         for (let i = 0; i < 5; i++) {
             if (this.cooldowns[i] > 0) this.cooldowns[i] -= dt;
         }
